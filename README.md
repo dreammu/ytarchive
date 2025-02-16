@@ -271,6 +271,9 @@ Options:
 		Pass in the given url as the video fragment url. Must be a
 		Google Video url with an itag parameter that is not 140.
 
+	--visitor-data <VISITOR_DATA>
+		?
+
 	--vp9
 		If there is a VP9 version of your selected video quality,
 		download that instead of the usual h264.

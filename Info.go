@@ -158,6 +158,7 @@ type DownloadInfo struct {
 	Metadata   MetaInfo
 	CookiesURL *url.URL
 	Ytcfg      *YTCFG
+	VisitorData string
 	PoToken    string
 
 	Stopping         bool

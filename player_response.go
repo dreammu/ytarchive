@@ -25,7 +25,8 @@ const (
 		'client': {
 			'clientName': '%s',
 			'clientVersion': '%s',
-			'hl': 'en'
+			'hl': 'en',
+			'visitorData': '%s'
 		}
 	},
 	'videoId': '%s',
@@ -281,7 +282,14 @@ func (di *DownloadInfo) DownloadWebPlayerResponse() (*PlayerResponse, error) {
 		queryParams = fmt.Sprintf("?innertube_key=%s", ytcfg.InnertubeApiKey)
 	}
 
-	data := []byte(fmt.Sprintf(WebAPIPostData, ytcfg.InnertubeClientName, ytcfg.InnertubeClientVersion, di.VideoID, di.PoToken))
+	VisitorData := ""
+	if len(di.VisitorData) > 0 {
+		VisitorData = di.VisitorData
+	} else if len(ytcfg.VisitorData) > 0 {
+		VisitorData = ytcfg.VisitorData
+	}
+
+	data := []byte(fmt.Sprintf(WebAPIPostData, ytcfg.InnertubeClientName, ytcfg.InnertubeClientVersion, VisitorData, di.VideoID, di.PoToken))
 	req, err := http.NewRequest("POST", fmt.Sprintf("https://www.youtube.com/youtubei/v1/player%s", queryParams), bytes.NewBuffer(data))
 	if err != nil {
 		return nil, err
@@ -305,8 +313,8 @@ func (di *DownloadInfo) DownloadWebPlayerResponse() (*PlayerResponse, error) {
 		req.Header.Add("X-Goog-PageId", ytcfg.DelegatedSessionId)
 	}
 
-	if len(ytcfg.VisitorData) > 0 {
-		req.Header.Add("X-Goog-Visitor-Id", ytcfg.VisitorData)
+	if len(VisitorData) > 0 {
+		req.Header.Add("X-Goog-Visitor-Id", VisitorData)
 	}
 
 	if len(ytcfg.SessionIndex) > 0 {

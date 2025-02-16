@@ -297,6 +297,9 @@ Options:
 		Pass in the given url as the video fragment url. Must be a
 		Google Video url with an itag parameter that is not 140.
 
+	--visitor-data <VISITOR_DATA>
+		?
+
 	--vp9
 		If there is a VP9 version of your selected video quality,
 		download that instead of the usual h264.
@@ -416,6 +419,7 @@ var (
 	liveFrom          string
 	startDelayStr     string
 	capDurationStr    string
+	visitorData	      string
 	poToken           string
 	threadCount       uint
 	fragMaxTries      uint
@@ -523,6 +527,7 @@ func init() {
 	cliFlags.StringVar(&liveFrom, "live-from", "", "Starts the download from the specified time instead of from the start.")
 	cliFlags.StringVar(&startDelayStr, "start-delay", "", "Waits for a specified length of time before starting to capture a stream.")
 	cliFlags.StringVar(&capDurationStr, "capture-duration", "", "Captures the livestream for the specified length of time and then exits automatically.")
+	cliFlags.StringVar(&visitorData, "visitor-data", "", "?")
 	cliFlags.StringVar(&poToken, "potoken", "", "PO Token from your browser")
 	cliFlags.IntVar(&retrySecs, "r", 0, "Seconds to wait between checking stream status.")
 	cliFlags.IntVar(&retrySecs, "retry-stream", 0, "Seconds to wait between checking stream status.")
@@ -604,6 +609,7 @@ func run() int {
 	info.DirMode = os.FileMode(dirPerms)
 	info.DisableSaveState = disableSaveState
 	info.LiveFromVal = liveFrom
+	info.VisitorData = visitorData
 	info.PoToken = poToken
 
 	if doWait {
