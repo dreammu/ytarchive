@@ -402,6 +402,9 @@ func (di *DownloadInfo) GetPlayablePlayerResponse() (retrieved int, pr *PlayerRe
 	waitOnLiveURL := isLiveURL && di.RetrySecs > 0 && !di.InProgress
 	liveWaited := 0
 	retryCount := 0
+	responseRetryCount := 0
+	videoDetailsRetryCount := 0
+	const MAX_RETRIES = 3
 	var secsLate int
 	var err error
 
@@ -444,6 +447,13 @@ func (di *DownloadInfo) GetPlayablePlayerResponse() (retrieved int, pr *PlayerRe
 				continue
 			}
 
+			if responseRetryCount < MAX_RETRIES {
+				responseRetryCount++
+				LogWarn("Error retrieving player response: %s (Retry %d/%d)", err.Error(), responseRetryCount, MAX_RETRIES)
+				time.Sleep(time.Duration(2) * time.Second)
+				continue
+			}
+
 			fmt.Fprintln(os.Stderr)
 			LogError("Error retrieving player response: %s", err.Error())
 			return PlayerResponseNotFound, nil, nil
@@ -455,6 +465,13 @@ func (di *DownloadInfo) GetPlayablePlayerResponse() (retrieved int, pr *PlayerRe
 				LogWarn("Stream was likely privated after finishing.")
 				LogWarn("We will continue to download, but if it starts to fail, nothing can be done.")
 				di.printStatusWithoutLock()
+			}
+
+			if videoDetailsRetryCount < MAX_RETRIES {
+				videoDetailsRetryCount++
+				LogWarn("Video Details not found (Retry %d/%d). Video may be private or does not exist.", videoDetailsRetryCount, MAX_RETRIES)
+				time.Sleep(time.Duration(2) * time.Second)
+				continue
 			}
 
 			LogError("Video Details not found, video is likely private or does not exist.")
