@@ -456,7 +456,7 @@ func (di *DownloadInfo) GetPlayablePlayerResponse() (retrieved int, pr *PlayerRe
 			}
 
 			fmt.Fprintln(os.Stderr)
-			LogError("Error retrieving player response: %s", err.Error())
+			LogError("Error retrieving player response, max retries reached.")
 			return PlayerResponseNotFound, nil, nil
 		}
 
@@ -470,13 +470,13 @@ func (di *DownloadInfo) GetPlayablePlayerResponse() (retrieved int, pr *PlayerRe
 
 			if videoDetailsRetryCount < MAX_RETRIES {
 				videoDetailsRetryCount++
-				LogWarn("Video Details not found (Retry %d/%d). Video may be private or does not exist.", videoDetailsRetryCount, MAX_RETRIES)
+				LogWarn("Video Details not found, video may be private or does not exist. (Retry %d/%d)", videoDetailsRetryCount, MAX_RETRIES)
 				client.CloseIdleConnections()
 				time.Sleep(time.Duration(2) * time.Second)
 				continue
 			}
 
-			LogError("Video Details not found, video is likely private or does not exist.")
+			LogError("Video Details not found, max retries reached.")
 			di.Live = false
 			di.Unavailable = true
 
