@@ -461,19 +461,19 @@ func (di *DownloadInfo) GetPlayablePlayerResponse() (retrieved int, pr *PlayerRe
 		}
 
 		if len(pr.VideoDetails.VideoID) == 0 {
-			if di.InProgress {
-				LogWarn("Video details no longer available mid download.")
-				LogWarn("Stream was likely privated after finishing.")
-				LogWarn("We will continue to download, but if it starts to fail, nothing can be done.")
-				di.printStatusWithoutLock()
-			}
-
 			if videoDetailsRetryCount < MAX_RETRIES {
 				videoDetailsRetryCount++
 				LogWarn("Video Details not found, video may be private or does not exist. (Retry %d/%d)", videoDetailsRetryCount, MAX_RETRIES)
 				client.CloseIdleConnections()
 				time.Sleep(time.Duration(2) * time.Second)
 				continue
+			}
+
+			if di.InProgress {
+				LogWarn("Video details no longer available mid download.")
+				LogWarn("Stream was likely privated after finishing.")
+				LogWarn("We will continue to download, but if it starts to fail, nothing can be done.")
+				di.printStatusWithoutLock()
 			}
 
 			LogError("Video Details not found, max retries reached.")
