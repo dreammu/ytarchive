@@ -76,6 +76,11 @@ Options:
 		Pass in the given url as the audio fragment url. Must be a
 		Google Video url with an itag parameter of 140.
 
+	--av1
+		If there is an AV1 version of your selected video quality,
+		download that instead of the usual h264. Takes precedence
+		over VP9 as well.
+
 	--capture-duration DURATION or TIMESTRING
 		Captures a livestream for the specified length of time 
 		and then exits and finalizes the video.
@@ -206,7 +211,7 @@ Options:
 
 	--potoken <PO TOKEN>
 		PO Token from your browser, basically required along with cookies these days.
-		Refer to https://github.com/yt-dlp/yt-dlp/wiki/Extractors#po-token-guide
+		Refer to https://github.com/yt-dlp/yt-dlp/wiki/PO-Token-Guide#guide-providing-a-po-token-manually-for-use-with-mweb-client
 
 	--proxy <SCHEME>://[<USER>:<PASS>@]<HOST>:<PORT>
 		Specify a proxy to use for downloading. e.g.
@@ -397,6 +402,13 @@ FORMAT TEMPLATE OPTIONS
 	channel (string): Full name of the channel the livestream is on
 	upload_date (string: YYYYMMDD): Technically stream start date, UTC timezone - see note below
 	start_date (string: YYYYMMDD): Stream start date, UTC timezone
+	start_time (string: HHMMSS): Stream start time, UTC timezone
+	year (string): Year extracted from stream start date, UTC timezone
+	month (string): Month extracted from stream start date, UTC timezone
+	day (string): Day extracted from stream start date, UTC timezone
+	hours (string): Hours extracted from stream start date, UTC timezone
+	minutes (string): Minutes extracted from stream start date, UTC timezone
+	seconds (string): Seconds extracted from stream start date, UTC timezone
 	publish_date (string: YYYYMMDD): Stream publish date, UTC timezone
 	description (string): Video description [disallowed for file name format template]
 
@@ -458,6 +470,7 @@ var (
 	separateAudio     bool
 	monitorChannel    bool
 	vp9               bool
+	av1               bool
 	h264              bool
 	membersOnly       bool
 	disableSaveState  bool
@@ -498,6 +511,7 @@ func init() {
 	cliFlags.BoolVar(&debug, "debug", false, "Debug logging output.")
 	cliFlags.BoolVar(&trace, "trace", false, "Trace logging output.")
 	cliFlags.BoolVar(&vp9, "vp9", false, "Download VP9 video if available.")
+	cliFlags.BoolVar(&av1, "av1", false, "Download AV1 video if available. Takes priority.")
 	cliFlags.BoolVar(&h264, "h264", false, "Only download h264 qualities.")
 	cliFlags.BoolVar(&addMeta, "add-metadata", false, "Write metadata to the final file.")
 	cliFlags.BoolVar(&writeDesc, "write-description", false, "Write description to a separate file.")
@@ -601,6 +615,7 @@ func run() int {
 	InitializeHttpClient(proxyUrl)
 
 	info.VP9 = vp9
+	info.AV1 = av1
 	info.H264 = h264
 	info.RetrySecs = retrySecs
 	info.FragMaxTries = fragMaxTries
@@ -697,13 +712,13 @@ func run() int {
 
 	err := info.ParseInputUrl()
 	if err != nil {
-		LogError(err.Error())
+		LogError("%s", err.Error())
 		return 1
 	}
 
 	_, err = FormatFilename(fnameFormat, info.FormatInfo, lookalikeChars)
 	if err != nil {
-		LogError(err.Error())
+		LogError("%s", err.Error())
 		return 1
 	}
 

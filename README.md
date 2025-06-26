@@ -12,7 +12,13 @@ Download the latest pre-release from [the releases page](https://github.com/Keth
 
 Alternatively, if you have Go properly installed and set up, run `go install github.com/Kethsar/ytarchive@dev`
 
+Note that only the main Linux and Windows builds are supported. The other builds are provided for convenience, but I offer zero support for them.
+If they work, great. If not, too bad.
+
 ## Usage
+
+`--potoken` is REQUIRED. Without one you will almost certainly encounter issues in regards to "Video details not found."
+Read [yt-dlp docs](https://github.com/yt-dlp/yt-dlp/wiki/PO-Token-Guide#guide-providing-a-po-token-manually-for-use-with-mweb-client) for a guide on getting a PO token.
 
 ```
 usage: ytarchive [OPTIONS] [url] [quality]
@@ -180,7 +186,7 @@ Options:
 
 	--potoken <PO TOKEN>
 		PO Token from your browser, basically required along with cookies these days.
-		Refer to https://github.com/yt-dlp/yt-dlp/wiki/Extractors#po-token-guide
+		Refer to https://github.com/yt-dlp/yt-dlp/wiki/PO-Token-Guide#guide-providing-a-po-token-manually-for-use-with-mweb-client
 
 	--proxy <SCHEME>://[<USER>:<PASS>@]<HOST>:<PORT>
 		Specify a proxy to use for downloading. e.g.
@@ -371,6 +377,13 @@ FORMAT TEMPLATE OPTIONS
 	channel (string): Full name of the channel the livestream is on
 	upload_date (string: YYYYMMDD): Technically stream start date, UTC timezone - see note below
 	start_date (string: YYYYMMDD): Stream start date, UTC timezone
+	start_time (string: HHMMSS): Stream start time, UTC timezone
+	year (string): Year extracted from stream start date, UTC timezone
+	month (string): Month extracted from stream start date, UTC timezone
+	day (string): Day extracted from stream start date, UTC timezone
+	hours (string): Hours extracted from stream start date, UTC timezone
+	minutes (string): Minutes extracted from stream start date, UTC timezone
+	seconds (string): Seconds extracted from stream start date, UTC timezone
 	publish_date (string: YYYYMMDD): Stream publish date, UTC timezone
 	description (string): Video description [disallowed for file name format template]
 

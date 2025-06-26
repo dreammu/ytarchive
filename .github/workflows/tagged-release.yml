@@ -13,7 +13,7 @@ jobs:
       - name: setup
         uses: actions/setup-go@v2
         with:
-          go-version: '1.19'
+          go-version: '1.24'
       - name: build
         run: ./make.sh
       - name: version
@@ -28,5 +28,13 @@ jobs:
           files: |
             ytarchive_linux_amd64.zip
             ytarchive_windows_amd64.zip
+            ytarchive_linux_armv7l.zip
+            ytarchive_linux_armv6.zip
+            ytarchive_linux_mips.zip
+            ytarchive_linux_mipsle.zip
+            ytarchive_windows_arm64.zip
+            ytarchive_linux_arm64.zip
+            ytarchive_macos_arm64.zip
+            ytarchive_macos.zip
             SHA2-256SUMS
 
