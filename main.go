@@ -433,6 +433,7 @@ var (
 	capDurationStr    string
 	visitorData	      string
 	poToken           string
+	ytdlpPath         string
 	threadCount       uint
 	fragMaxTries      uint
 	filePerms         uint
@@ -543,6 +544,7 @@ func init() {
 	cliFlags.StringVar(&capDurationStr, "capture-duration", "", "Captures the livestream for the specified length of time and then exits automatically.")
 	cliFlags.StringVar(&visitorData, "visitor-data", "", "?")
 	cliFlags.StringVar(&poToken, "potoken", "", "PO Token from your browser")
+	cliFlags.StringVar(&ytdlpPath, "ytdlp-path", "yt-dlp", "Path to yt-dlp executable for retrieving stream URLs")
 	cliFlags.IntVar(&retrySecs, "r", 0, "Seconds to wait between checking stream status.")
 	cliFlags.IntVar(&retrySecs, "retry-stream", 0, "Seconds to wait between checking stream status.")
 	cliFlags.UintVar(&threadCount, "threads", 1, "Number of download threads for each stream type.")
@@ -626,6 +628,7 @@ func run() int {
 	info.LiveFromVal = liveFrom
 	info.VisitorData = visitorData
 	info.PoToken = poToken
+	info.YtdlpPath = ytdlpPath
 
 	if doWait {
 		info.Wait = ActionDo

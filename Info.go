@@ -2,6 +2,7 @@ package main
 
 import (
 	"bytes"
+	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -10,6 +11,7 @@ import (
 	"net/http"
 	"net/url"
 	"os"
+	"os/exec"
 	"strconv"
 	"strings"
 	"sync"
@@ -184,6 +186,7 @@ type DownloadInfo struct {
 	SelectedQuality string
 	Status          string
 	LiveFromVal     string
+	YtdlpPath       string
 
 	FragMaxTries        uint
 	Wait                int
@@ -520,6 +523,97 @@ func (di *DownloadInfo) GetGvideoUrl(dataType string) {
 	}
 }
 
+// Execute yt-dlp command to get stream info
+func (di *DownloadInfo) ExecuteYtdlp() ([]byte, error) {
+	args := []string{"-j"}
+	
+	// Add cookies parameter
+	if len(cookieFile) > 0 {
+		args = append(args, "--cookies", cookieFile)
+	}
+	
+	// Add proxy parameter
+	if proxyUrl != nil {
+		args = append(args, "--proxy", proxyUrl.String())
+	}
+	
+	// Add URL
+	args = append(args, di.URL)
+	
+	// Execute command with 30 second timeout
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+	
+	cmd := exec.CommandContext(ctx, di.YtdlpPath, args...)
+	output, err := cmd.Output()
+	
+	return output, err
+}
+
+// Execute yt-dlp with retry logic (max 3 attempts)
+func (di *DownloadInfo) ExecuteYtdlpWithRetry(maxRetries int) []byte {
+	for i := 0; i < maxRetries; i++ {
+		LogDebug("Executing yt-dlp (attempt %d/%d)", i+1, maxRetries)
+		
+		output, err := di.ExecuteYtdlp()
+		if err == nil {
+			LogDebug("Successfully retrieved stream info from yt-dlp")
+			return output
+		}
+		
+		LogDebug("yt-dlp attempt %d/%d failed: %v", i+1, maxRetries, err)
+		if i < maxRetries-1 {
+			time.Sleep(2 * time.Second)
+		}
+	}
+	
+	LogWarn("Failed to get stream info from yt-dlp after %d attempts", maxRetries)
+	return nil
+}
+
+// Parse yt-dlp JSON output to extract adaptive format URLs
+func (di *DownloadInfo) ParseYtdlpJson(jsonData []byte) map[int]string {
+	urls := make(map[int]string)
+	
+	var payload struct {
+		Formats []struct {
+			FormatID string `json:"format_id"`
+			URL      string `json:"url"`
+			Protocol string `json:"protocol"`
+		} `json:"formats"`
+	}
+
+	if err := json.Unmarshal(jsonData, &payload); err != nil {
+		LogDebug("Failed to parse yt-dlp json: %v", err)
+		return urls
+	}
+
+	for _, format := range payload.Formats {
+		if format.Protocol != "https" {
+			continue
+		}
+		if format.FormatID == "" || format.URL == "" {
+			continue
+		}
+		itag, err := strconv.Atoi(format.FormatID)
+		if err != nil || itag == 0 {
+			continue
+		}
+		if _, ok := urls[itag]; ok {
+			continue
+		}
+
+		// Use URL as-is from yt-dlp, just escape % for fmt.Sprintf and add sq placeholder
+		urls[itag] = strings.ReplaceAll(format.URL, "%", "%%") + "&sq=%d"
+	}
+
+	if len(urls) > 0 {
+		LogDebug("Loaded %d adaptive format URLs from yt-dlp", len(urls))
+	}
+
+	return urls
+}
+
 func (di *DownloadInfo) ParseLiveFromStrVal() error {
 	if di.LiveFromVal == "" {
 		return nil
@@ -704,15 +798,51 @@ func (di *DownloadInfo) ParseInputUrl() error {
 }
 
 /*
-Get download URLs from the DASH manifest
-Attempts to grab from the Web API player response as well as desktop,
-favouring Web API. Any formats not found in the Web API are looked for in the
-desktop player response.
+Get download URLs prioritizing yt-dlp over DASH manifest.
+DASH manifest is only used to get LastSq when yt-dlp provides formats.
 */
 func (di *DownloadInfo) GetDownloadUrls(pr *PlayerResponse) map[int]string {
 	urls := make(map[int]string)
-	WebPlayerResponse, err := di.DownloadWebAPIPlayerResponse()
+	
+	// Priority 1: Try to get URLs from yt-dlp command execution
+	if di.YtdlpPath != "" {
+		jsonData := di.ExecuteYtdlpWithRetry(3)
+		if jsonData != nil {
+			adaptiveUrls := di.ParseYtdlpJson(jsonData)
+			if len(adaptiveUrls) > 0 {
+				LogDebug("Using yt-dlp adaptive formats as primary source")
+				for itag, url := range adaptiveUrls {
+					urls[itag] = url
+					LogTrace("Setting itag %d from yt-dlp", itag)
+				}
+				
+				// Still try to get LastSq from DASH manifest for timing info
+				WebPlayerResponse, err := di.DownloadWebAPIPlayerResponse()
+				if err == nil && len(WebPlayerResponse.StreamingData.DashManifestURL) > 0 {
+					manifest := DownloadData(WebPlayerResponse.StreamingData.DashManifestURL)
+					if len(manifest) > 0 {
+						_, di.LastSq = GetUrlsFromManifest(manifest, di.PoToken)
+						LogDebug("Got LastSq=%d from DASH manifest", di.LastSq)
+					}
+				}
+				
+				// If we didn't get LastSq from Web API, try web page DASH manifest
+				if di.LastSq == 0 && len(pr.StreamingData.DashManifestURL) > 0 {
+					manifest := DownloadData(pr.StreamingData.DashManifestURL)
+					if len(manifest) > 0 {
+						_, di.LastSq = GetUrlsFromManifest(manifest, di.PoToken)
+						LogDebug("Got LastSq=%d from web page DASH manifest", di.LastSq)
+					}
+				}
+				
+				return urls
+			}
+		}
+	}
 
+	// Priority 2: Fallback to Web API DASH manifest
+	LogDebug("yt-dlp not available or failed, falling back to DASH manifest")
+	WebPlayerResponse, err := di.DownloadWebAPIPlayerResponse()
 	if err != nil {
 		LogDebug("Error getting Web API player response: %s", err.Error())
 	} else {
@@ -730,6 +860,7 @@ func (di *DownloadInfo) GetDownloadUrls(pr *PlayerResponse) map[int]string {
 		}
 	}
 
+	// Priority 3: Fallback to web page DASH manifest
 	if len(pr.StreamingData.DashManifestURL) > 0 {
 		LogDebug("Retrieving URLs from web page DASH manifest")
 		manifest := DownloadData(pr.StreamingData.DashManifestURL)
