@@ -1019,6 +1019,23 @@ func (di *DownloadInfo) GetVideoInfo() bool {
 			_, h264Ok := dlUrls[videoItag.H264]
 			_, av1Ok := dlUrls[videoItag.AV1]
 
+			// If this label is a 60fps variant but its AV1 itag is actually the
+			// same as the base-quality AV1, and the base quality has H264/VP9
+			// available, treat the 60fps AV1 as not present so we fall back to
+			// the base quality selection.
+			if strings.HasSuffix(qlabel, "60") {
+				baseQuality := strings.TrimSuffix(qlabel, "60")
+				if baseItag, ok := VideoLabelItags[baseQuality]; ok {
+					if baseItag.AV1 == videoItag.AV1 {
+						_, baseH264Ok := dlUrls[baseItag.H264]
+						_, baseVp9Ok := dlUrls[baseItag.VP9]
+						if baseH264Ok || baseVp9Ok {
+							av1Ok = false
+						}
+					}
+				}
+			}
+
 			if Contains(qualities, qlabel) || (!vp9Ok && !h264Ok && !av1Ok) {
 				continue
 			}
@@ -1054,6 +1071,7 @@ func (di *DownloadInfo) GetVideoInfo() bool {
 				}
 
 				codecOrder := di.GetCodecPriorityOrder()
+				LogDebug("Codec priority order: %s", strings.ToUpper(strings.Join(codecOrder, ", ")))
 				for _, codec := range codecOrder {
 					var itag int
 					switch codec {
@@ -1067,7 +1085,22 @@ func (di *DownloadInfo) GetVideoInfo() bool {
 					if itag == AudioOnlyQuality {
 						continue
 					}
+					// If the base quality has H264/VP9 available, treat the 60fps AV1 as unavailable.
+					if codec == "av1" && strings.HasSuffix(q, "60") {
+						baseQuality := strings.TrimSuffix(q, "60")
+						if baseItag, ok := VideoLabelItags[baseQuality]; ok {
+							if baseItag.AV1 == videoItag.AV1 {
+								_, baseH264Ok := dlUrls[baseItag.H264]
+								_, baseVp9Ok := dlUrls[baseItag.VP9]
+								if baseH264Ok || baseVp9Ok {
+									LogDebug("Treating %s AV1 itag=%d as unavailable", q, videoItag.AV1)
+									continue
+								}
+							}
+						}
+					}
 					url, ok := dlUrls[itag]
+					LogDebug("Codec availability: %s itag=%d ok=%v", strings.ToUpper(codec), itag, ok)
 					if !ok {
 						continue
 					}
