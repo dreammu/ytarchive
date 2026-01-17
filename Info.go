@@ -933,6 +933,37 @@ func (di *DownloadInfo) ParseStartDelayStrVal(durationVal string) error {
 	return nil
 }
 
+func (di *DownloadInfo) GetCodecPriorityOrder() []string {
+	baseOrder := []string{"h264", "vp9", "av1"}
+	preferred := make([]string, 0, len(baseOrder))
+
+	for _, codec := range baseOrder {
+		switch codec {
+		case "h264":
+			if di.H264 {
+				preferred = append(preferred, codec)
+			}
+		case "vp9":
+			if di.VP9 {
+				preferred = append(preferred, codec)
+			}
+		case "av1":
+			if di.AV1 {
+				preferred = append(preferred, codec)
+			}
+		}
+	}
+
+	order := append([]string{}, preferred...)
+	for _, codec := range baseOrder {
+		if !Contains(order, codec) {
+			order = append(order, codec)
+		}
+	}
+
+	return order
+}
+
 // Get necessary video info such as video/audio URLs
 func (di *DownloadInfo) GetVideoInfo() bool {
 	di.Lock()
@@ -1022,30 +1053,33 @@ func (di *DownloadInfo) GetVideoInfo() bool {
 					break
 				}
 
-				_, vp9Ok := dlUrls[videoItag.VP9]
-				_, h264Ok := dlUrls[videoItag.H264]
-				_, av1Ok := dlUrls[videoItag.AV1]
+				codecOrder := di.GetCodecPriorityOrder()
+				for _, codec := range codecOrder {
+					var itag int
+					switch codec {
+					case "h264":
+						itag = videoItag.H264
+					case "vp9":
+						itag = videoItag.VP9
+					case "av1":
+						itag = videoItag.AV1
+					}
+					if itag == AudioOnlyQuality {
+						continue
+					}
+					url, ok := dlUrls[itag]
+					if !ok {
+						continue
+					}
 
-				if av1Ok && (di.AV1 || (!h264Ok && !vp9Ok)) && !di.H264 {
-					di.SetDownloadUrl(DtypeVideo, dlUrls[videoItag.AV1])
-					di.Quality = videoItag.AV1
+					di.SetDownloadUrl(DtypeVideo, url)
+					di.Quality = itag
 					found = true
-					LogGeneral("Selected quality: %s (AV1)\n", q)
-					LogTrace("Video URL: %s", dlUrls[videoItag.AV1])
+					LogGeneral("Selected quality: %s (%s)\n", q, strings.ToUpper(codec))
+					LogTrace("Video URL: %s", url)
 					break
-				} else if vp9Ok && (di.VP9 || (!h264Ok && !av1Ok)) && !di.H264 { // Sometimes a quality is VP9 only apparently
-					di.SetDownloadUrl(DtypeVideo, dlUrls[videoItag.VP9])
-					di.Quality = videoItag.VP9
-					found = true
-					LogGeneral("Selected quality: %s (VP9)\n", q)
-					LogTrace("Video URL: %s", dlUrls[videoItag.VP9])
-					break
-				} else if h264Ok {
-					di.SetDownloadUrl(DtypeVideo, dlUrls[videoItag.H264])
-					di.Quality = videoItag.H264
-					found = true
-					LogGeneral("Selected quality: %s (h264)\n", q)
-					LogTrace("Video URL: %s", dlUrls[videoItag.H264])
+				}
+				if found {
 					break
 				}
 			}
