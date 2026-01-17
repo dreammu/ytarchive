@@ -278,7 +278,9 @@ Options:
 		Google Video url with an itag parameter that is not 140.
 
 	--visitor-data <VISITOR_DATA>
-		?
+		Visitor data of YouTube. Can be used together with --potoken
+		to download streams without providing cookies. This might be
+		useful for downloading public streams.
 
 	--vp9
 		If there is a VP9 version of your selected video quality,
@@ -304,6 +306,14 @@ Options:
 
 	--write-thumbnail
 		Write the thumbnail to a separate file.
+
+	--ytdlp-path PATH
+		Path to yt-dlp executable. Default is 'yt-dlp'.
+
+	--ytdlp-opts OPTIONS
+		Additional options to pass to yt-dlp when retrieving stream URLs.
+		Useful for specifying extractor arguments or other yt-dlp parameters.
+		Example: '--extractor-args youtube:player_client=android'
 
 	--live-from DURATION, TIMESTRING or NOW
 		Starts the download from the specified time in the future, the past or 'now'.

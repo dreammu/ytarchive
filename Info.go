@@ -187,6 +187,7 @@ type DownloadInfo struct {
 	Status          string
 	LiveFromVal     string
 	YtdlpPath       string
+	YtdlpOpts       string
 
 	FragMaxTries        uint
 	Wait                int
@@ -535,6 +536,13 @@ func (di *DownloadInfo) ExecuteYtdlp() ([]byte, error) {
 	// Add proxy parameter
 	if proxyUrl != nil {
 		args = append(args, "--proxy", proxyUrl.String())
+	}
+	
+	// Add custom yt-dlp options
+	if len(di.YtdlpOpts) > 0 {
+		// Split the options string by spaces, respecting quoted strings
+		customArgs := strings.Fields(di.YtdlpOpts)
+		args = append(args, customArgs...)
 	}
 	
 	// Add URL
