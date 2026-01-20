@@ -1,5 +1,29 @@
 # ytarchive
 
+This is a forked version based on [Kethsar/ytarchive](https://github.com/Kethsar/ytarchive), with modifications primarily tailored for personal use.
+
+## Differences in this fork
+
+### 1. Using yt-dlp as the primary extractor
+- This fork uses yt-dlp to obtain YouTube livestream URLs.
+- **Important Note**: To use yt-dlp for extraction, you need to modify the `extractor/youtube/_video.py` file of the `yt_dlp` package installed via pip.
+- The following line of code needs to be removed:
+  ```python
+  if fmt_stream.get('targetDurationSec'):
+      continue
+  ```
+- With yt-dlp extraction integrated, it's fine not to pass potoken to ytarchive, but you may need to pass potoken to yt-dlp via `--ytdlp-opts` if you don't have a potoken provider.
+
+### 2. Added support for Visitor Data parameter
+- Added `--visitor-data` parameter, allowing for not passing cookies when providing potoken.
+
+### 3. Personal preference optimizations
+- **Enhanced Retry Mechanism**: Added up to 3 retry attempts for retrieving player response and video details.
+- **Encoding Preference Adjustment**: Priority order changed to `h264 > vp9 > av1`.
+- **Re-extraction Time**: The re-extraction time threshold has been modified to 5 hours and 59 minutes.
+
+## Original project description
+
 Attempt to archive a given Youtube livestream from the start. This is most useful for streams that have already started and you want to download, but can also be used to wait for a scheduled stream and start downloading as soon as it starts. If you want to download a VOD, I recommend [yt-dlp](https://github.com/yt-dlp/yt-dlp), which is an actively maintained fork of youtube-dl with more features.
 
 ## Dependencies
