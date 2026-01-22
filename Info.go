@@ -934,7 +934,7 @@ func (di *DownloadInfo) ParseStartDelayStrVal(durationVal string) error {
 }
 
 func (di *DownloadInfo) GetCodecPriorityOrder() []string {
-	baseOrder := []string{"h264", "vp9", "av1"}
+	baseOrder := []string{"av1", "vp9", "h264"}
 	preferred := make([]string, 0, len(baseOrder))
 
 	for _, codec := range baseOrder {

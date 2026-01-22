@@ -19,7 +19,6 @@ This is a forked version based on [Kethsar/ytarchive](https://github.com/Kethsar
 
 ### 3. Personal preference optimizations
 - **Enhanced Retry Mechanism**: Added up to 3 retry attempts for retrieving player response and video details.
-- **Encoding Preference Adjustment**: Priority order changed to `h264 > vp9 > av1`.
 - **Re-extraction Time**: The re-extraction time threshold has been modified to 5 hours and 59 minutes.
 
 ## Original project description
