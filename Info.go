@@ -526,7 +526,7 @@ func (di *DownloadInfo) GetGvideoUrl(dataType string) {
 
 // Execute yt-dlp command to get stream info
 func (di *DownloadInfo) ExecuteYtdlp() ([]byte, error) {
-	args := []string{"-j"}
+	args := []string{"-j", "--extractor-args", "youtube:formats=incomplete"}
 	
 	// Add cookies parameter
 	if len(cookieFile) > 0 {
@@ -569,7 +569,7 @@ func (di *DownloadInfo) ExecuteYtdlpWithRetry(maxRetries int) []byte {
 			return output
 		}
 		
-		LogDebug("yt-dlp attempt %d/%d failed: %v", i+1, maxRetries, err)
+		LogWarn("yt-dlp attempt %d/%d failed: %v", i+1, maxRetries, err)
 		if i < maxRetries-1 {
 			time.Sleep(2 * time.Second)
 		}
@@ -580,46 +580,149 @@ func (di *DownloadInfo) ExecuteYtdlpWithRetry(maxRetries int) []byte {
 }
 
 // Parse yt-dlp JSON output to extract adaptive format URLs
-func (di *DownloadInfo) ParseYtdlpJson(jsonData []byte) map[int]string {
-	urls := make(map[int]string)
-	
+func parseSqFromPath(path string) int {
+	if path == "" {
+		return 0
+	}
+
+	sqIdx := strings.Index(path, "sq/")
+	if sqIdx < 0 {
+		return 0
+	}
+
+	sqStart := sqIdx + len("sq/")
+	sqEnd := strings.Index(path[sqStart:], "/")
+	sqVal := ""
+	if sqEnd < 0 {
+		sqVal = path[sqStart:]
+	} else {
+		sqVal = path[sqStart : sqStart+sqEnd]
+	}
+
+	sq, err := strconv.Atoi(sqVal)
+	if err != nil {
+		return 0
+	}
+
+	return sq
+}
+
+func parseItagFromFormatID(formatID string) int {
+	if formatID == "" {
+		return 0
+	}
+
+	trimmed := strings.TrimSpace(formatID)
+	if dashIdx := strings.Index(trimmed, "-"); dashIdx >= 0 {
+		trimmed = trimmed[:dashIdx]
+	}
+
+	itag, err := strconv.Atoi(trimmed)
+	if err != nil || itag == 0 {
+		return 0
+	}
+
+	return itag
+}
+
+func parseSqFromUrl(rawUrl string) int {
+	if rawUrl == "" {
+		return 0
+	}
+
+	parsed, err := url.Parse(rawUrl)
+	if err == nil {
+		if sq := parseSqFromPath(parsed.Path); sq > 0 {
+			return sq
+		}
+	}
+
+	return parseSqFromPath(rawUrl)
+}
+
+func parseLastSqFromFragments(fragments []struct {
+	Path          string `json:"path"`
+	URL           string `json:"url"`
+	FragmentCount int    `json:"fragment_count"`
+}) int {
+	for i := len(fragments) - 1; i >= 0; i-- {
+		frag := fragments[i]
+		if sq := parseSqFromPath(frag.Path); sq > 0 {
+			return sq
+		}
+		if sq := parseSqFromUrl(frag.URL); sq > 0 {
+			return sq
+		}
+	}
+
+	return 0
+}
+
+func (di *DownloadInfo) ParseYtdlpJson(jsonData []byte) (map[int]string, map[int]string, int) {
+	adaptiveUrls := make(map[int]string)
+	dashUrls := make(map[int]string)
+	lastSq := 0
+
 	var payload struct {
 		Formats []struct {
-			FormatID string `json:"format_id"`
-			URL      string `json:"url"`
-			Protocol string `json:"protocol"`
+			FormatID        string `json:"format_id"`
+			URL             string `json:"url"`
+			Protocol        string `json:"protocol"`
+			FragmentBaseURL string `json:"fragment_base_url"`
+			Fragments       []struct {
+				Path          string `json:"path"`
+				URL           string `json:"url"`
+				FragmentCount int    `json:"fragment_count"`
+			} `json:"fragments"`
 		} `json:"formats"`
 	}
 
 	if err := json.Unmarshal(jsonData, &payload); err != nil {
 		LogDebug("Failed to parse yt-dlp json: %v", err)
-		return urls
+		return adaptiveUrls, dashUrls, lastSq
 	}
 
 	for _, format := range payload.Formats {
+		if format.Protocol == "http_dash_segments" {
+			if sq := parseLastSqFromFragments(format.Fragments); sq > lastSq {
+				lastSq = sq
+			}
+
+			itag := parseItagFromFormatID(format.FormatID)
+			if itag == 0 || format.FragmentBaseURL == "" {
+				continue
+			}
+			baseUrl := format.FragmentBaseURL
+			if !strings.HasSuffix(baseUrl, "/") {
+				baseUrl += "/"
+			}
+			dashUrls[itag] = strings.ReplaceAll(baseUrl, "%", "%%") + "sq/%d"
+			continue
+		}
+
 		if format.Protocol != "https" {
 			continue
 		}
 		if format.FormatID == "" || format.URL == "" {
 			continue
 		}
-		itag, err := strconv.Atoi(format.FormatID)
-		if err != nil || itag == 0 {
-			continue
-		}
-		if _, ok := urls[itag]; ok {
+		itag := parseItagFromFormatID(format.FormatID)
+		if itag == 0 {
 			continue
 		}
 
-		// Use URL as-is from yt-dlp, just escape % for fmt.Sprintf and add sq placeholder
-		urls[itag] = strings.ReplaceAll(format.URL, "%", "%%") + "&sq=%d"
+		// Prefer adaptive HTTPS URLs over DASH fragment URLs when both exist.
+		adaptiveUrls[itag] = strings.ReplaceAll(format.URL, "%", "%%") + "&sq=%d"
 	}
 
-	if len(urls) > 0 {
-		LogDebug("Loaded %d adaptive format URLs from yt-dlp", len(urls))
+	if len(adaptiveUrls) > 0 {
+		LogDebug("Loaded %d adaptive format URLs from yt-dlp", len(adaptiveUrls))
+	}
+	if len(dashUrls) > 0 {
+		LogDebug("Loaded %d dash format URLs from yt-dlp", len(dashUrls))
 	}
 
-	return urls
+	return adaptiveUrls, dashUrls, lastSq
 }
 
 func (di *DownloadInfo) ParseLiveFromStrVal() error {
@@ -816,33 +919,32 @@ func (di *DownloadInfo) GetDownloadUrls(pr *PlayerResponse) map[int]string {
 	if di.YtdlpPath != "" {
 		jsonData := di.ExecuteYtdlpWithRetry(3)
 		if jsonData != nil {
-			adaptiveUrls := di.ParseYtdlpJson(jsonData)
+			adaptiveUrls, dashUrls, ytdlpLastSq := di.ParseYtdlpJson(jsonData)
 			if len(adaptiveUrls) > 0 {
 				LogDebug("Using yt-dlp adaptive formats as primary source")
 				for itag, url := range adaptiveUrls {
 					urls[itag] = url
 					LogTrace("Setting itag %d from yt-dlp", itag)
 				}
-				
-				// Still try to get LastSq from DASH manifest for timing info
-				WebPlayerResponse, err := di.DownloadWebAPIPlayerResponse()
-				if err == nil && len(WebPlayerResponse.StreamingData.DashManifestURL) > 0 {
-					manifest := DownloadData(WebPlayerResponse.StreamingData.DashManifestURL)
-					if len(manifest) > 0 {
-						_, di.LastSq = GetUrlsFromManifest(manifest, di.PoToken)
-						LogDebug("Got LastSq=%d from DASH manifest", di.LastSq)
-					}
+				if ytdlpLastSq > 0 {
+					di.LastSq = ytdlpLastSq
+					LogDebug("Got LastSq=%d from yt-dlp DASH fragments", di.LastSq)
 				}
-				
-				// If we didn't get LastSq from Web API, try web page DASH manifest
-				if di.LastSq == 0 && len(pr.StreamingData.DashManifestURL) > 0 {
-					manifest := DownloadData(pr.StreamingData.DashManifestURL)
-					if len(manifest) > 0 {
-						_, di.LastSq = GetUrlsFromManifest(manifest, di.PoToken)
-						LogDebug("Got LastSq=%d from web page DASH manifest", di.LastSq)
-					}
+
+				return urls
+			}
+
+			if len(dashUrls) > 0 {
+				LogDebug("Using yt-dlp dash formats as fallback")
+				for itag, url := range dashUrls {
+					urls[itag] = url
+					LogTrace("Setting itag %d from yt-dlp dash", itag)
 				}
-				
+				if ytdlpLastSq > 0 {
+					di.LastSq = ytdlpLastSq
+					LogDebug("Got LastSq=%d from yt-dlp DASH fragments", di.LastSq)
+				}
+
 				return urls
 			}
 		}
