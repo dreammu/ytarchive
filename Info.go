@@ -527,34 +527,34 @@ func (di *DownloadInfo) GetGvideoUrl(dataType string) {
 // Execute yt-dlp command to get stream info
 func (di *DownloadInfo) ExecuteYtdlp() ([]byte, error) {
 	args := []string{"-j", "--extractor-args", "youtube:formats=incomplete"}
-	
+
 	// Add cookies parameter
 	if len(cookieFile) > 0 {
 		args = append(args, "--cookies", cookieFile)
 	}
-	
+
 	// Add proxy parameter
 	if proxyUrl != nil {
 		args = append(args, "--proxy", proxyUrl.String())
 	}
-	
+
 	// Add custom yt-dlp options
 	if len(di.YtdlpOpts) > 0 {
 		// Split the options string by spaces, respecting quoted strings
 		customArgs := strings.Fields(di.YtdlpOpts)
 		args = append(args, customArgs...)
 	}
-	
+
 	// Add URL
 	args = append(args, di.URL)
-	
+
 	// Execute command with 30 second timeout
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
-	
+
 	cmd := exec.CommandContext(ctx, di.YtdlpPath, args...)
 	output, err := cmd.Output()
-	
+
 	return output, err
 }
 
@@ -562,19 +562,19 @@ func (di *DownloadInfo) ExecuteYtdlp() ([]byte, error) {
 func (di *DownloadInfo) ExecuteYtdlpWithRetry(maxRetries int) []byte {
 	for i := 0; i < maxRetries; i++ {
 		LogDebug("Executing yt-dlp (attempt %d/%d)", i+1, maxRetries)
-		
+
 		output, err := di.ExecuteYtdlp()
 		if err == nil {
 			LogDebug("Successfully retrieved stream info from yt-dlp")
 			return output
 		}
-		
+
 		LogWarn("yt-dlp attempt %d/%d failed: %v", i+1, maxRetries, err)
 		if i < maxRetries-1 {
 			time.Sleep(2 * time.Second)
 		}
 	}
-	
+
 	LogWarn("Failed to get stream info from yt-dlp after %d attempts", maxRetries)
 	return nil
 }
@@ -909,12 +909,13 @@ func (di *DownloadInfo) ParseInputUrl() error {
 }
 
 /*
-Get download URLs prioritizing yt-dlp over DASH manifest.
-DASH manifest is only used to get LastSq when yt-dlp provides formats.
+Get download URLs from the adaptive formats or DASH manifest
+Prioritize the adaptive formats from yt-dlp if available, then DASH from yt-dlp,
+then DASH from Web API, then DASH from web page
 */
 func (di *DownloadInfo) GetDownloadUrls(pr *PlayerResponse) map[int]string {
 	urls := make(map[int]string)
-	
+
 	// Priority 1: Try to get URLs from yt-dlp command execution
 	if di.YtdlpPath != "" {
 		jsonData := di.ExecuteYtdlpWithRetry(3)

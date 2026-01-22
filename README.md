@@ -6,8 +6,8 @@ This is a forked version based on [Kethsar/ytarchive](https://github.com/Kethsar
 
 ### 1. Using yt-dlp as the primary extractor
 - This fork uses yt-dlp to obtain YouTube livestream URLs.
-- **Important Note**: To use yt-dlp for extraction, you need to modify the `extractor/youtube/_video.py` file of the `yt_dlp` package installed via pip.
-- The following line of code needs to be removed:
+- **Important Note**: To extract videos properly using yt-dlp, it is recommended to modify the `extractor/youtube/_video.py` file in the pip-installed `yt_dlp` package; otherwise, only DASH manifest URLs may be available, which might not include the best-quality formats.
+- The following code needs to be removed:
   ```python
   if fmt_stream.get('targetDurationSec'):
       continue
