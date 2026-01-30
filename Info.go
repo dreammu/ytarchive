@@ -549,7 +549,7 @@ func (di *DownloadInfo) ExecuteYtdlp() ([]byte, error) {
 	args = append(args, di.URL)
 
 	// Execute command with 30 second timeout
-	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	ctx, cancel := context.WithTimeout(context.Background(), 30 * time.Second)
 	defer cancel()
 
 	cmd := exec.CommandContext(ctx, di.YtdlpPath, args...)
@@ -1600,7 +1600,7 @@ func (di *DownloadInfo) DownloadStream(dataType, dataFile string, progressChan c
 				closed = true
 			}
 		} else if slowFrags >= 10 {
-			RefreshURL(di, dataType, "")
+			// RefreshURL(di, dataType, "")
 			slowFrags = 0
 		}
 
@@ -1782,10 +1782,10 @@ func (di *DownloadInfo) DownloadStream(dataType, dataFile string, progressChan c
 			break
 		}
 
-		updateDelta := di.GetTimeSinceUpdated()
-		if !stopping && !di.IsUnavailable() && updateDelta > 5 * time.Hour + 59 * time.Minute {
-			di.GetVideoInfo()
-		}
+		// updateDelta := di.GetTimeSinceUpdated()
+		// if !stopping && !di.IsUnavailable() && updateDelta > time.Hour {
+		// 	di.GetVideoInfo()
+		// }
 
 		if tries <= 0 {
 			LogWarn("%s: Stopping download, something must be wrong...", logName)

@@ -19,7 +19,7 @@ This is a forked version based on [Kethsar/ytarchive](https://github.com/Kethsar
 
 ### 3. Personal preference optimizations
 - **Enhanced Retry Mechanism**: Added up to 3 retry attempts for retrieving player response and video details.
-- **Re-extraction Time**: The re-extraction time threshold has been modified to 5 hours and 59 minutes.
+- **Re-extraction**: The re-extraction per hour and slow fragment refresh logic has been commented out. That's saying only when getting 403 errors during downloading, the URLs will be refreshed.
 
 ## Original project description
 

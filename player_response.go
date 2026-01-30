@@ -449,7 +449,7 @@ func (di *DownloadInfo) GetPlayablePlayerResponse() (retrieved int, pr *PlayerRe
 				responseRetryCount++
 				LogWarn("Error retrieving player response: %s (Retry %d/%d)", err.Error(), responseRetryCount, MAX_RETRIES)
 				client.CloseIdleConnections()
-				time.Sleep(time.Duration(2) * time.Second)
+				time.Sleep(2 * time.Second)
 				continue
 			}
 
@@ -463,7 +463,7 @@ func (di *DownloadInfo) GetPlayablePlayerResponse() (retrieved int, pr *PlayerRe
 				videoDetailsRetryCount++
 				LogWarn("Video Details not found, video may be private or does not exist. (Retry %d/%d)", videoDetailsRetryCount, MAX_RETRIES)
 				client.CloseIdleConnections()
-				time.Sleep(time.Duration(2) * time.Second)
+				time.Sleep(2 * time.Second)
 				continue
 			}
 
