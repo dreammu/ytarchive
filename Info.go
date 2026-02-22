@@ -28,8 +28,8 @@ const (
 	AudioOnlyQuality      = 0
 	BufferSize            = 8192
 	DefaultFilenameFormat = "%(title)s-%(id)s"
-	// 5 days in seconds
-	LiveMaximumSeekable = 432000
+	// 7 days in seconds
+	LiveMaximumSeekable = 86400 * 7
 )
 
 type VideoItag struct {
@@ -746,9 +746,9 @@ func (di *DownloadInfo) ParseLiveFromStrVal() error {
 				errStr := fmt.Errorf("invalid duration specified. the stream has not been live for that long [live for %s]", curStreamDuration)
 				return errors.New(errStr.Error())
 			} else {
-				// Make sure the Start Frag is within the 5 day limit.
+				// Make sure the Start Frag is within the 7 day limit.
 				if targetStartFrag < (di.LastSq - LiveMaximumSeekable) {
-					LogError("YT only retains the livestream 5 days past for seeking, your --live-from value of '%s' is not valid.", di.LiveFromVal)
+					LogError("YT only retains the livestream 7 days past for seeking, your --live-from value of '%s' is not valid.", di.LiveFromVal)
 
 					// Calculate how long the stream has been live for
 					streamLiveTime := di.LastSq * di.TargetDuration
@@ -916,7 +916,7 @@ func (di *DownloadInfo) GetDownloadUrls(pr *PlayerResponse) map[int]string {
 			LogDebug("Retrieving URLs from Web API DASH manifest")
 			manifest := DownloadData(WebPlayerResponse.StreamingData.DashManifestURL)
 			if len(manifest) > 0 {
-				// we store the LastSq to calculate 5 days past
+				// we store the LastSq to calculate 7 days past
 				urls, di.LastSq = GetUrlsFromManifest(manifest, di.PoToken)
 			}
 
@@ -931,7 +931,7 @@ func (di *DownloadInfo) GetDownloadUrls(pr *PlayerResponse) map[int]string {
 		LogDebug("Retrieving URLs from web page DASH manifest")
 		manifest := DownloadData(pr.StreamingData.DashManifestURL)
 		if len(manifest) > 0 {
-			// we store the LastSq to calculate 5 days past
+			// we store the LastSq to calculate 7 days past
 			dashUrls, lastSq := GetUrlsFromManifest(manifest, di.PoToken)
 			if lastSq > di.LastSq {
 				di.LastSq = lastSq
@@ -1515,8 +1515,8 @@ func (di *DownloadInfo) DownloadStream(dataType, dataFile string, progressChan c
 				LogDebug("%s: Starting from sequence %d (latest is %d)", dataType, startFrag, di.LastSq)
 			}
 		} else if curFrag > 0 {
-			// Stream that has been live for more than 5 days.
-			LogWarn("%s: YT only retains the livestream 5 days past for seeking, starting from sequence %d (latest is %d)", dataType, curFrag, di.LastSq)
+			// Stream that has been live for more than 7 days.
+			LogWarn("%s: YT only retains the livestream 7 days past for seeking, starting from sequence %d (latest is %d)", dataType, curFrag, di.LastSq)
 			startFrag = curFrag
 		} else {
 			// All other stream lengths.
