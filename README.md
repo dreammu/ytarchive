@@ -6,13 +6,9 @@ This is a forked version based on [Kethsar/ytarchive](https://github.com/Kethsar
 
 ### 1. Using yt-dlp as the primary extractor
 - This fork uses yt-dlp to obtain YouTube livestream URLs.
-- **Important Note**: To extract videos properly using yt-dlp, it is recommended to modify the `extractor/youtube/_video.py` file in the pip-installed `yt_dlp` package; otherwise, only DASH manifest URLs may be available, which might not include the best-quality formats.
-- The following code needs to be removed:
-  ```python
-  if fmt_stream.get('targetDurationSec'):
-      continue
-  ```
 - With yt-dlp extraction integrated, it's fine not to pass potoken to ytarchive, but you may need to pass potoken to yt-dlp via `--ytdlp-opts` if you don't have a potoken provider.
+- Since [this commit](https://github.com/yt-dlp/yt-dlp/commit/319a2bda83f5e54054661c56c1391533f82473c2), modifying yt-dlp to extract adaptive formats is no longer required. Please update yt-dlp to the latest version.
+- **Note**: If you pass `--extractor-args` to the `youtube` extractor via `--ytdlp-opts`, please ensure that `formats=incomplete` is included in the passed arguments to prevent it from being overridden and causing extraction to fail.
 
 ### 2. Added support for Visitor Data parameter
 - Added `--visitor-data` parameter, allowing for not passing cookies when providing potoken.
