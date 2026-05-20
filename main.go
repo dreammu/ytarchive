@@ -27,7 +27,7 @@ const (
 const (
 	MajorVersion = 0
 	MinorVersion = 5
-	PatchVersion = 0
+	PatchVersion = 1
 )
 
 var (
@@ -303,7 +303,9 @@ Options:
 		Google Video url with an itag parameter that is not 140.
 
 	--visitor-data <VISITOR_DATA>
-		?
+		Visitor data of YouTube. Can be used together with --potoken
+		to download streams without providing cookies. This might be
+		useful for downloading public streams.
 
 	--vp9
 		If there is a VP9 version of your selected video quality,
@@ -329,6 +331,14 @@ Options:
 
 	--write-thumbnail
 		Write the thumbnail to a separate file.
+
+	--ytdlp-path PATH
+		Path to yt-dlp executable. Default is 'yt-dlp'.
+
+	--ytdlp-opts OPTIONS
+		Additional options to pass to yt-dlp when retrieving stream URLs.
+		Useful for specifying extractor arguments or other yt-dlp parameters.
+		Example: '--extractor-args youtube:player_client=android'
 
 	--live-from DURATION, TIMESTRING or NOW
 		Starts the download from the specified time in the future, the past or 'now'.
@@ -433,6 +443,8 @@ var (
 	capDurationStr    string
 	visitorData	      string
 	poToken           string
+	ytdlpPath         string
+	ytdlpOpts         string
 	threadCount       uint
 	fragMaxTries      uint
 	filePerms         uint
@@ -541,8 +553,10 @@ func init() {
 	cliFlags.StringVar(&liveFrom, "live-from", "", "Starts the download from the specified time instead of from the start.")
 	cliFlags.StringVar(&startDelayStr, "start-delay", "", "Waits for a specified length of time before starting to capture a stream.")
 	cliFlags.StringVar(&capDurationStr, "capture-duration", "", "Captures the livestream for the specified length of time and then exits automatically.")
-	cliFlags.StringVar(&visitorData, "visitor-data", "", "?")
+	cliFlags.StringVar(&visitorData, "visitor-data", "", "Visitor data of YouTube. Can be used together with --potoken to download streams without providing cookies.")
 	cliFlags.StringVar(&poToken, "potoken", "", "PO Token from your browser")
+	cliFlags.StringVar(&ytdlpPath, "ytdlp-path", "yt-dlp", "Path to yt-dlp executable for retrieving stream URLs")
+	cliFlags.StringVar(&ytdlpOpts, "ytdlp-opts", "", "Additional options to pass to yt-dlp (e.g., '--extractor-args youtube:player_client=android')")
 	cliFlags.IntVar(&retrySecs, "r", 0, "Seconds to wait between checking stream status.")
 	cliFlags.IntVar(&retrySecs, "retry-stream", 0, "Seconds to wait between checking stream status.")
 	cliFlags.UintVar(&threadCount, "threads", 1, "Number of download threads for each stream type.")
@@ -626,6 +640,8 @@ func run() int {
 	info.LiveFromVal = liveFrom
 	info.VisitorData = visitorData
 	info.PoToken = poToken
+	info.YtdlpPath = ytdlpPath
+	info.YtdlpOpts = ytdlpOpts
 
 	if doWait {
 		info.Wait = ActionDo

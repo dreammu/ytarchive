@@ -2,6 +2,7 @@ package main
 
 import (
 	"bytes"
+	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -10,6 +11,7 @@ import (
 	"net/http"
 	"net/url"
 	"os"
+	"os/exec"
 	"strconv"
 	"strings"
 	"sync"
@@ -26,8 +28,8 @@ const (
 	AudioOnlyQuality      = 0
 	BufferSize            = 8192
 	DefaultFilenameFormat = "%(title)s-%(id)s"
-	// 5 days in seconds
-	LiveMaximumSeekable = 432000
+	// 7 days in seconds
+	LiveMaximumSeekable = 86400 * 7
 )
 
 type VideoItag struct {
@@ -184,6 +186,8 @@ type DownloadInfo struct {
 	SelectedQuality string
 	Status          string
 	LiveFromVal     string
+	YtdlpPath       string
+	YtdlpOpts       string
 
 	FragMaxTries        uint
 	Wait                int
@@ -520,6 +524,164 @@ func (di *DownloadInfo) GetGvideoUrl(dataType string) {
 	}
 }
 
+// Execute yt-dlp command to get stream info
+func (di *DownloadInfo) ExecuteYtdlp() ([]byte, error) {
+	args := []string{"-j", "--extractor-args", "youtube:formats=incomplete"}
+
+	// Add cookies parameter
+	if len(cookieFile) > 0 {
+		args = append(args, "--cookies", cookieFile)
+	}
+
+	// Add proxy parameter
+	if proxyUrl != nil {
+		args = append(args, "--proxy", proxyUrl.String())
+	}
+
+	// Add custom yt-dlp options
+	if len(di.YtdlpOpts) > 0 {
+		// Split the options string by spaces, respecting quoted strings
+		customArgs := strings.Fields(di.YtdlpOpts)
+		args = append(args, customArgs...)
+	}
+
+	// Add URL
+	args = append(args, di.URL)
+
+	// Execute command with 30 second timeout
+	ctx, cancel := context.WithTimeout(context.Background(), 30 * time.Second)
+	defer cancel()
+
+	cmd := exec.CommandContext(ctx, di.YtdlpPath, args...)
+	output, err := cmd.Output()
+
+	return output, err
+}
+
+// Execute yt-dlp with retry logic (max 3 attempts)
+func (di *DownloadInfo) ExecuteYtdlpWithRetry(maxRetries int) []byte {
+	for i := 0; i < maxRetries; i++ {
+		LogDebug("Executing yt-dlp (attempt %d/%d)", i+1, maxRetries)
+
+		output, err := di.ExecuteYtdlp()
+		if err == nil {
+			LogDebug("Successfully retrieved stream info from yt-dlp")
+			return output
+		}
+
+		LogWarn("yt-dlp attempt %d/%d failed: %v", i+1, maxRetries, err)
+		if i < maxRetries-1 {
+			time.Sleep(2 * time.Second)
+		}
+	}
+
+	LogWarn("Failed to get stream info from yt-dlp after %d attempts", maxRetries)
+	return nil
+}
+
+// Parse yt-dlp JSON output to extract adaptive format URLs
+func parseItagFromFormatID(formatID string) int {
+	left, _, _ := strings.Cut(formatID, "-")
+	itag, _ := strconv.Atoi(left)
+	return itag
+}
+
+func parseSqFromPath(fragmentPath string) int {
+	path := strings.Trim(fragmentPath, "/")
+	parts := strings.Split(path, "/")
+
+	for i := 0; i+1 < len(parts); i++ {
+		if parts[i] == "sq" {
+			if sq, err := strconv.Atoi(parts[i+1]); err == nil {
+				return sq
+			}
+			return -1
+		}
+	}
+	return -1
+}
+
+func parseSqFromURL(fragmentURL string) int {
+	if u, err := url.Parse(fragmentURL); err == nil {
+		return parseSqFromPath(u.Path)
+	}
+	return -1
+}
+
+func parseLastSqFromFragments(fragments []struct {
+	Path          string `json:"path"`
+	URL           string `json:"url"`
+	FragmentCount int    `json:"fragment_count"`
+}) int {
+	for i := len(fragments) - 1; i >= 0; i-- {
+		frag := fragments[i]
+		if sq := parseSqFromPath(frag.Path); sq > 0 {
+			return sq
+		}
+		if frag.FragmentCount > 0 {
+			return frag.FragmentCount
+		}
+		if sq := parseSqFromURL(frag.URL); sq > 0 {
+			return sq
+		}
+	}
+
+	return -1
+}
+
+func (di *DownloadInfo) ParseYtdlpJson(jsonData []byte) (map[int]string, map[int]string, int) {
+	adaptiveUrls := make(map[int]string)
+	dashUrls := make(map[int]string)
+	lastSq := -1
+
+	var payload struct {
+		Formats []struct {
+			FormatID        string `json:"format_id"`
+			URL             string `json:"url"`
+			Protocol        string `json:"protocol"`
+			FragmentBaseURL string `json:"fragment_base_url"`
+			Fragments       []struct {
+				Path          string `json:"path"`
+				URL           string `json:"url"`
+				FragmentCount int    `json:"fragment_count"`
+			} `json:"fragments"`
+		} `json:"formats"`
+	}
+
+	if err := json.Unmarshal(jsonData, &payload); err != nil {
+		LogDebug("Failed to parse yt-dlp json: %v", err)
+		return adaptiveUrls, dashUrls, lastSq
+	}
+
+	for _, format := range payload.Formats {
+		if format.Protocol == "http_dash_segments" {
+			if sq := parseLastSqFromFragments(format.Fragments); sq > lastSq {
+				lastSq = sq
+			}
+
+			itag := parseItagFromFormatID(format.FormatID)
+			baseUrl := format.FragmentBaseURL
+			dashUrls[itag] = strings.ReplaceAll(baseUrl, "%", "%%") + "sq/%d"
+			continue
+		}
+
+		if format.Protocol != "https" {
+			continue
+		}
+		itag := parseItagFromFormatID(format.FormatID)
+		adaptiveUrls[itag] = strings.ReplaceAll(format.URL, "%", "%%") + "&sq=%d"
+	}
+
+	if len(adaptiveUrls) > 0 {
+		LogDebug("Loaded %d adaptive format URLs from yt-dlp", len(adaptiveUrls))
+	}
+	if len(dashUrls) > 0 {
+		LogDebug("Loaded %d dash format URLs from yt-dlp", len(dashUrls))
+	}
+
+	return adaptiveUrls, dashUrls, lastSq
+}
+
 func (di *DownloadInfo) ParseLiveFromStrVal() error {
 	if di.LiveFromVal == "" {
 		return nil
@@ -584,9 +746,9 @@ func (di *DownloadInfo) ParseLiveFromStrVal() error {
 				errStr := fmt.Errorf("invalid duration specified. the stream has not been live for that long [live for %s]", curStreamDuration)
 				return errors.New(errStr.Error())
 			} else {
-				// Make sure the Start Frag is within the 5 day limit.
+				// Make sure the Start Frag is within the 7 day limit.
 				if targetStartFrag < (di.LastSq - LiveMaximumSeekable) {
-					LogError("YT only retains the livestream 5 days past for seeking, your --live-from value of '%s' is not valid.", di.LiveFromVal)
+					LogError("YT only retains the livestream 7 days past for seeking, your --live-from value of '%s' is not valid.", di.LiveFromVal)
 
 					// Calculate how long the stream has been live for
 					streamLiveTime := di.LastSq * di.TargetDuration
@@ -704,15 +866,49 @@ func (di *DownloadInfo) ParseInputUrl() error {
 }
 
 /*
-Get download URLs from the DASH manifest
-Attempts to grab from the Web API player response as well as desktop,
-favouring Web API. Any formats not found in the Web API are looked for in the
-desktop player response.
+Get download URLs from the adaptive formats or DASH manifest
+Prioritize the adaptive formats from yt-dlp if available, then DASH from yt-dlp,
+then DASH from Web API, then DASH from web page
 */
 func (di *DownloadInfo) GetDownloadUrls(pr *PlayerResponse) map[int]string {
 	urls := make(map[int]string)
-	WebPlayerResponse, err := di.DownloadWebAPIPlayerResponse()
 
+	// Priority 1: Try to get URLs from yt-dlp command execution
+	if di.YtdlpPath != "" {
+		jsonData := di.ExecuteYtdlpWithRetry(3)
+		if jsonData != nil {
+			adaptiveUrls, dashUrls, ytdlpLastSq := di.ParseYtdlpJson(jsonData)
+			if len(adaptiveUrls) > 0 {
+				LogDebug("Using yt-dlp adaptive formats as primary source")
+				for itag, url := range adaptiveUrls {
+					urls[itag] = url
+					LogTrace("Setting itag %d from yt-dlp adaptive formats", itag)
+				}
+				if ytdlpLastSq > 0 {
+					di.LastSq = ytdlpLastSq
+				}
+
+				return urls
+			}
+
+			if len(dashUrls) > 0 {
+				LogDebug("Using yt-dlp dash formats as fallback")
+				for itag, url := range dashUrls {
+					urls[itag] = url
+					LogTrace("Setting itag %d from yt-dlp dash formats", itag)
+				}
+				if ytdlpLastSq > 0 {
+					di.LastSq = ytdlpLastSq
+				}
+
+				return urls
+			}
+		}
+	}
+
+	// Priority 2: Fallback to Web API DASH manifest
+	LogDebug("yt-dlp not available or failed, falling back to DASH manifest")
+	WebPlayerResponse, err := di.DownloadWebAPIPlayerResponse()
 	if err != nil {
 		LogDebug("Error getting Web API player response: %s", err.Error())
 	} else {
@@ -720,7 +916,7 @@ func (di *DownloadInfo) GetDownloadUrls(pr *PlayerResponse) map[int]string {
 			LogDebug("Retrieving URLs from Web API DASH manifest")
 			manifest := DownloadData(WebPlayerResponse.StreamingData.DashManifestURL)
 			if len(manifest) > 0 {
-				// we store the LastSq to calculate 5 days past
+				// we store the LastSq to calculate 7 days past
 				urls, di.LastSq = GetUrlsFromManifest(manifest, di.PoToken)
 			}
 
@@ -730,11 +926,12 @@ func (di *DownloadInfo) GetDownloadUrls(pr *PlayerResponse) map[int]string {
 		}
 	}
 
+	// Priority 3: Fallback to web page DASH manifest
 	if len(pr.StreamingData.DashManifestURL) > 0 {
 		LogDebug("Retrieving URLs from web page DASH manifest")
 		manifest := DownloadData(pr.StreamingData.DashManifestURL)
 		if len(manifest) > 0 {
-			// we store the LastSq to calculate 5 days past
+			// we store the LastSq to calculate 7 days past
 			dashUrls, lastSq := GetUrlsFromManifest(manifest, di.PoToken)
 			if lastSq > di.LastSq {
 				di.LastSq = lastSq
@@ -794,6 +991,37 @@ func (di *DownloadInfo) ParseStartDelayStrVal(durationVal string) error {
 	return nil
 }
 
+func (di *DownloadInfo) GetCodecPriorityOrder() []string {
+	baseOrder := []string{"av1", "vp9", "h264"}
+	preferred := make([]string, 0, len(baseOrder))
+
+	for _, codec := range baseOrder {
+		switch codec {
+		case "h264":
+			if di.H264 {
+				preferred = append(preferred, codec)
+			}
+		case "vp9":
+			if di.VP9 {
+				preferred = append(preferred, codec)
+			}
+		case "av1":
+			if di.AV1 {
+				preferred = append(preferred, codec)
+			}
+		}
+	}
+
+	order := append([]string{}, preferred...)
+	for _, codec := range baseOrder {
+		if !Contains(order, codec) {
+			order = append(order, codec)
+		}
+	}
+
+	return order
+}
+
 // Get necessary video info such as video/audio URLs
 func (di *DownloadInfo) GetVideoInfo() bool {
 	di.Lock()
@@ -849,6 +1077,23 @@ func (di *DownloadInfo) GetVideoInfo() bool {
 			_, h264Ok := dlUrls[videoItag.H264]
 			_, av1Ok := dlUrls[videoItag.AV1]
 
+			// If this label is a 60fps variant but its AV1 itag is actually the
+			// same as the base-quality AV1, and the base quality has H264/VP9
+			// available, treat the 60fps AV1 as not present so we fall back to
+			// the base quality selection.
+			if strings.HasSuffix(qlabel, "60") {
+				baseQuality := strings.TrimSuffix(qlabel, "60")
+				if baseItag, ok := VideoLabelItags[baseQuality]; ok {
+					if baseItag.AV1 == videoItag.AV1 {
+						_, baseH264Ok := dlUrls[baseItag.H264]
+						_, baseVp9Ok := dlUrls[baseItag.VP9]
+						if baseH264Ok || baseVp9Ok {
+							av1Ok = false
+						}
+					}
+				}
+			}
+
 			if Contains(qualities, qlabel) || (!vp9Ok && !h264Ok && !av1Ok) {
 				continue
 			}
@@ -883,30 +1128,51 @@ func (di *DownloadInfo) GetVideoInfo() bool {
 					break
 				}
 
-				_, vp9Ok := dlUrls[videoItag.VP9]
-				_, h264Ok := dlUrls[videoItag.H264]
-				_, av1Ok := dlUrls[videoItag.AV1]
+				codecOrder := di.GetCodecPriorityOrder()
+				LogDebug("Codec priority order: %s", strings.ToUpper(strings.Join(codecOrder, ", ")))
+				for _, codec := range codecOrder {
+					var itag int
+					switch codec {
+					case "h264":
+						itag = videoItag.H264
+					case "vp9":
+						itag = videoItag.VP9
+					case "av1":
+						itag = videoItag.AV1
+					}
+					if itag == AudioOnlyQuality {
+						continue
+					}
+					// If the base quality has H264/VP9 available, treat the 60fps AV1 as unavailable.
+					if codec == "av1" && strings.HasSuffix(q, "60") {
+						if _, av1Ok := dlUrls[videoItag.AV1]; av1Ok {
+							baseQuality := strings.TrimSuffix(q, "60")
+							if baseItag, ok := VideoLabelItags[baseQuality]; ok {
+								if baseItag.AV1 == videoItag.AV1 {
+									_, baseH264Ok := dlUrls[baseItag.H264]
+									_, baseVp9Ok := dlUrls[baseItag.VP9]
+									if baseH264Ok || baseVp9Ok {
+										LogDebug("Treating %s AV1 itag=%d as unavailable", q, videoItag.AV1)
+										continue
+									}
+								}
+							}
+						}
+					}
+					url, ok := dlUrls[itag]
+					LogDebug("Codec availability: %s itag=%d ok=%v", strings.ToUpper(codec), itag, ok)
+					if !ok {
+						continue
+					}
 
-				if av1Ok && (di.AV1 || (!h264Ok && !vp9Ok)) && !di.H264 {
-					di.SetDownloadUrl(DtypeVideo, dlUrls[videoItag.AV1])
-					di.Quality = videoItag.AV1
+					di.SetDownloadUrl(DtypeVideo, url)
+					di.Quality = itag
 					found = true
-					LogGeneral("Selected quality: %s (AV1)\n", q)
-					LogTrace("Video URL: %s", dlUrls[videoItag.AV1])
+					LogGeneral("Selected quality: %s (%s)\n", q, strings.ToUpper(codec))
+					LogTrace("Video URL: %s", url)
 					break
-				} else if vp9Ok && (di.VP9 || (!h264Ok && !av1Ok)) && !di.H264 { // Sometimes a quality is VP9 only apparently
-					di.SetDownloadUrl(DtypeVideo, dlUrls[videoItag.VP9])
-					di.Quality = videoItag.VP9
-					found = true
-					LogGeneral("Selected quality: %s (VP9)\n", q)
-					LogTrace("Video URL: %s", dlUrls[videoItag.VP9])
-					break
-				} else if h264Ok {
-					di.SetDownloadUrl(DtypeVideo, dlUrls[videoItag.H264])
-					di.Quality = videoItag.H264
-					found = true
-					LogGeneral("Selected quality: %s (h264)\n", q)
-					LogTrace("Video URL: %s", dlUrls[videoItag.H264])
+				}
+				if found {
 					break
 				}
 			}
@@ -1249,8 +1515,8 @@ func (di *DownloadInfo) DownloadStream(dataType, dataFile string, progressChan c
 				LogDebug("%s: Starting from sequence %d (latest is %d)", dataType, startFrag, di.LastSq)
 			}
 		} else if curFrag > 0 {
-			// Stream that has been live for more than 5 days.
-			LogWarn("%s: YT only retains the livestream 5 days past for seeking, starting from sequence %d (latest is %d)", dataType, curFrag, di.LastSq)
+			// Stream that has been live for more than 7 days.
+			LogWarn("%s: YT only retains the livestream 7 days past for seeking, starting from sequence %d (latest is %d)", dataType, curFrag, di.LastSq)
 			startFrag = curFrag
 		} else {
 			// All other stream lengths.
@@ -1289,7 +1555,7 @@ func (di *DownloadInfo) DownloadStream(dataType, dataFile string, progressChan c
 				closed = true
 			}
 		} else if slowFrags >= 10 {
-			RefreshURL(di, dataType, "")
+			// RefreshURL(di, dataType, "")
 			slowFrags = 0
 		}
 
@@ -1471,10 +1737,10 @@ func (di *DownloadInfo) DownloadStream(dataType, dataFile string, progressChan c
 			break
 		}
 
-		updateDelta := di.GetTimeSinceUpdated()
-		if !stopping && !di.IsUnavailable() && updateDelta > time.Hour {
-			di.GetVideoInfo()
-		}
+		// updateDelta := di.GetTimeSinceUpdated()
+		// if !stopping && !di.IsUnavailable() && updateDelta > time.Hour {
+		// 	di.GetVideoInfo()
+		// }
 
 		if tries <= 0 {
 			LogWarn("%s: Stopping download, something must be wrong...", logName)

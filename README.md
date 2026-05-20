@@ -1,5 +1,24 @@
 # ytarchive
 
+This is a forked version based on [Kethsar/ytarchive](https://github.com/Kethsar/ytarchive), with modifications primarily tailored for personal use.
+
+## Differences in this fork
+
+### 1. Using yt-dlp as the primary extractor
+- This fork uses yt-dlp to obtain YouTube livestream URLs.
+- With yt-dlp extraction integrated, it's fine not to pass potoken to ytarchive, but you may need to pass potoken to yt-dlp via `--ytdlp-opts` if you don't have a potoken provider.
+- Since [this commit](https://github.com/yt-dlp/yt-dlp/commit/319a2bda83f5e54054661c56c1391533f82473c2), modifying yt-dlp to extract adaptive formats is no longer required. Please update yt-dlp to the latest version.
+- **Note**: If you pass `--extractor-args` to the `youtube` extractor via `--ytdlp-opts`, please ensure that `formats=incomplete` is included in the passed arguments to prevent it from being overridden and causing extraction to fail.
+
+### 2. Added support for Visitor Data parameter
+- Added `--visitor-data` parameter, allowing for not passing cookies when providing potoken.
+
+### 3. Personal preference optimizations
+- **Enhanced Retry Mechanism**: Added up to 3 retry attempts for retrieving player response and video details.
+- **Re-extraction**: The re-extraction per hour and slow fragment refresh logic has been commented out. That's saying only when getting 403 errors during downloading, the URLs will be refreshed.
+
+## Original project description
+
 Attempt to archive a given Youtube livestream from the start. This is most useful for streams that have already started and you want to download, but can also be used to wait for a scheduled stream and start downloading as soon as it starts. If you want to download a VOD, I recommend [yt-dlp](https://github.com/yt-dlp/yt-dlp), which is an actively maintained fork of youtube-dl with more features.
 
 ## Dependencies
@@ -10,7 +29,7 @@ Attempt to archive a given Youtube livestream from the start. This is most usefu
 
 Download the latest pre-release from [the releases page](https://github.com/Kethsar/ytarchive/releases)
 
-Alternatively, if you have Go properly installed and set up, run `go install github.com/Kethsar/ytarchive@dev`
+Alternatively, if you have Go properly installed and set up, run `go install github.com/dreammu/ytarchive@dev`
 
 Note that only the main Linux and Windows builds are supported. The other builds are provided for convenience, but I offer zero support for them.
 If they work, great. If not, too bad.
@@ -278,7 +297,9 @@ Options:
 		Google Video url with an itag parameter that is not 140.
 
 	--visitor-data <VISITOR_DATA>
-		?
+		Visitor data of YouTube. Can be used together with --potoken
+		to download streams without providing cookies. This might be
+		useful for downloading public streams.
 
 	--vp9
 		If there is a VP9 version of your selected video quality,
@@ -304,6 +325,14 @@ Options:
 
 	--write-thumbnail
 		Write the thumbnail to a separate file.
+
+	--ytdlp-path PATH
+		Path to yt-dlp executable. Default is 'yt-dlp'.
+
+	--ytdlp-opts OPTIONS
+		Additional options to pass to yt-dlp when retrieving stream URLs.
+		Useful for specifying extractor arguments or other yt-dlp parameters.
+		Example: '--extractor-args youtube:player_client=android'
 
 	--live-from DURATION, TIMESTRING or NOW
 		Starts the download from the specified time in the future, the past or 'now'.
