@@ -11,8 +11,10 @@ dist/
 *.xml
 *.json
 *.txt
+*.html
 getvinfo.py
 *.sh
-ytarchive
+ytarchive*
 *.exe
 *.zip
+SHA2-256SUMS

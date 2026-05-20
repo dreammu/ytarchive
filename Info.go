@@ -33,6 +33,7 @@ const (
 type VideoItag struct {
 	H264 int
 	VP9  int
+	AV1  int
 }
 
 // https://gist.github.com/AgentOak/34d47c65b1d28829bb17c24c04a0096f
@@ -42,19 +43,19 @@ var (
 	}
 
 	VideoLabelItags = map[string]VideoItag{
-		"audio_only": {H264: 0, VP9: 0},
-		"144p":       {H264: 160, VP9: 278},
-		"240p":       {H264: 133, VP9: 242},
-		"360p":       {H264: 134, VP9: 243},
-		"480p":       {H264: 135, VP9: 244},
-		"720p":       {H264: 136, VP9: 247},
-		"720p60":     {H264: 298, VP9: 302},
-		"1080p":      {H264: 137, VP9: 248},
-		"1080p60":    {H264: 299, VP9: 303},
-		"1440p":      {H264: 264, VP9: 271},
-		"1440p60":    {H264: 304, VP9: 308},
-		"2160p":      {H264: 266, VP9: 313},
-		"2160p60":    {H264: 305, VP9: 315},
+		"audio_only": {H264: 0, VP9: 0, AV1: 0},
+		"144p":       {H264: 160, VP9: 278, AV1: 394},
+		"240p":       {H264: 133, VP9: 242, AV1: 395},
+		"360p":       {H264: 134, VP9: 243, AV1: 396},
+		"480p":       {H264: 135, VP9: 244, AV1: 397},
+		"720p":       {H264: 136, VP9: 247, AV1: 398},
+		"720p60":     {H264: 298, VP9: 302, AV1: 398},
+		"1080p":      {H264: 137, VP9: 248, AV1: 399},
+		"1080p60":    {H264: 299, VP9: 303, AV1: 399},
+		"1440p":      {H264: 264, VP9: 271, AV1: 400},
+		"1440p60":    {H264: 304, VP9: 308, AV1: 400},
+		"2160p":      {H264: 266, VP9: 313, AV1: 401},
+		"2160p60":    {H264: 305, VP9: 315, AV1: 401},
 	}
 
 	VideoQualities = []string{
@@ -166,6 +167,7 @@ type DownloadInfo struct {
 	Live             bool
 	VP9              bool
 	H264             bool
+	AV1              bool
 	Unavailable      bool
 	GVideoDDL        bool
 	FragFiles        bool
@@ -175,25 +177,25 @@ type DownloadInfo struct {
 	MembersOnly      bool
 	InfoPrinted      bool
 	DisableSaveState bool
-	LiveFromVal      string
-	LiveFromSq       int
 
-	Thumbnail           string
-	VideoID             string
-	URL                 string
-	SelectedQuality     string
-	Status              string
+	Thumbnail       string
+	VideoID         string
+	URL             string
+	SelectedQuality string
+	Status          string
+	LiveFromVal     string
+
+	FragMaxTries        uint
+	Wait                int
+	Quality             int
+	RetrySecs           int
+	Jobs                int
+	TargetDuration      int
+	LastSq              int
+	LiveFromSq          int
 	CaptureDurationSecs int
 	StartDelaySecs      int
-
-	FragMaxTries   uint
-	Wait           int
-	Quality        int
-	RetrySecs      int
-	Jobs           int
-	TargetDuration int
-	LastSq         int
-	LastUpdated    time.Time
+	LastUpdated         time.Time
 
 	MDLInfo map[string]*MediaDLInfo
 	DLState map[int]*DownloadState
@@ -237,6 +239,13 @@ func NewFormatInfo() FormatInfo {
 		"channel":      "",
 		"upload_date":  "",
 		"start_date":   "",
+		"year":   "",
+		"month":   "",
+		"day":   "",
+		"start_time":   "",
+		"hours":   "",
+		"minutes":   "",
+		"seconds":   "",
 		"publish_date": "",
 		"description":  "",
 		"url":          "",
@@ -360,11 +369,23 @@ func (fi FormatInfo) SetInfo(player_response *PlayerResponse) {
 	pmfr := player_response.Microformat.PlayerMicroformatRenderer
 	vid := player_response.VideoDetails.VideoID
 	startDate := strings.ReplaceAll(pmfr.LiveBroadcastDetails.StartTimestamp, "-", "")
+	year, month, day, hours, minutes, seconds := "", "", "", "", "", ""
+	startTime := strings.ReplaceAll(pmfr.LiveBroadcastDetails.StartTimestamp, ":", "")
 	publishDate := strings.ReplaceAll(pmfr.PublishDate, "-", "")
 	url := fmt.Sprintf("https://www.youtube.com/watch?v=%s", vid)
 
 	if len(startDate) > 0 {
 		startDate = startDate[:8]
+		year = startDate[:4]
+		month = startDate[4:6]
+		day = startDate[6:8]
+	}
+
+	if len(startTime) > 0 {
+		startTime = startTime[11:17]
+		hours = startTime[:2]
+		minutes = startTime[2:4]
+		seconds = startTime[4:6]
 	}
 
 	fi["id"] = vid
@@ -374,6 +395,13 @@ func (fi FormatInfo) SetInfo(player_response *PlayerResponse) {
 	fi["channel"] = player_response.VideoDetails.Author
 	fi["upload_date"] = startDate
 	fi["start_date"] = startDate
+	fi["year"] = year
+	fi["month"] = month
+	fi["day"] = day
+	fi["start_time"] = startTime
+	fi["hours"] = hours
+	fi["minutes"] = minutes
+	fi["seconds"] = seconds
 	fi["publish_date"] = publishDate
 	fi["description"] = strings.TrimSpace(player_response.VideoDetails.ShortDescription)
 }
@@ -676,15 +704,14 @@ func (di *DownloadInfo) ParseInputUrl() error {
 }
 
 /*
-Get download URLs either from the DASH manifest or from the adaptiveFormats.
-Prioritize DASH manifest if it is available.
+Get download URLs from the DASH manifest
 Attempts to grab from the Web API player response as well as desktop,
 favouring Web API. Any formats not found in the Web API are looked for in the
 desktop player response.
 */
 func (di *DownloadInfo) GetDownloadUrls(pr *PlayerResponse) map[int]string {
 	urls := make(map[int]string)
-	WebPlayerResponse, err := di.DownloadWebPlayerResponse()
+	WebPlayerResponse, err := di.DownloadWebAPIPlayerResponse()
 
 	if err != nil {
 		LogDebug("Error getting Web API player response: %s", err.Error())
@@ -701,25 +728,10 @@ func (di *DownloadInfo) GetDownloadUrls(pr *PlayerResponse) map[int]string {
 				LogTrace("Setting itag %d from Web API DASH manifest", itag)
 			}
 		}
-
-		if len(WebPlayerResponse.StreamingData.AdaptiveFormats) > 0 {
-			LogDebug("Retrieving URLs from Web API adaptive formats")
-			for _, fmt := range WebPlayerResponse.StreamingData.AdaptiveFormats {
-				if len(fmt.URL) == 0 {
-					continue
-				}
-				if _, ok := urls[fmt.Itag]; ok { // format exists already
-					continue
-				}
-
-				urls[fmt.Itag] = strings.ReplaceAll(fmt.URL, "%", "%%") + "&sq=%d"
-				LogTrace("Setting itag %d from Web API adaptive formats", fmt.Itag)
-			}
-		}
 	}
 
 	if len(pr.StreamingData.DashManifestURL) > 0 {
-		LogDebug("Retrieving URLs from web DASH manifest")
+		LogDebug("Retrieving URLs from web page DASH manifest")
 		manifest := DownloadData(pr.StreamingData.DashManifestURL)
 		if len(manifest) > 0 {
 			// we store the LastSq to calculate 5 days past
@@ -734,23 +746,8 @@ func (di *DownloadInfo) GetDownloadUrls(pr *PlayerResponse) map[int]string {
 				}
 
 				urls[itag] = url
-				LogTrace("Setting itag %d from web adaptive formats", itag)
+				LogTrace("Setting itag %d from web page DASH manifest", itag)
 			}
-		}
-	}
-
-	if len(pr.StreamingData.AdaptiveFormats) > 0 {
-		LogDebug("Retrieving URLs from web adaptive formats")
-		for _, fmt := range pr.StreamingData.AdaptiveFormats {
-			if len(fmt.URL) == 0 {
-				continue
-			}
-			if _, ok := urls[fmt.Itag]; ok { // format exists already
-				continue
-			}
-
-			urls[fmt.Itag] = strings.ReplaceAll(fmt.URL, "%", "%%") + "&sq=%d"
-			LogTrace("Setting itag %d from web adaptive formats", fmt.Itag)
 		}
 	}
 
@@ -850,8 +847,9 @@ func (di *DownloadInfo) GetVideoInfo() bool {
 			videoItag := VideoLabelItags[qlabel]
 			_, vp9Ok := dlUrls[videoItag.VP9]
 			_, h264Ok := dlUrls[videoItag.H264]
+			_, av1Ok := dlUrls[videoItag.AV1]
 
-			if Contains(qualities, qlabel) || (!vp9Ok && !h264Ok) {
+			if Contains(qualities, qlabel) || (!vp9Ok && !h264Ok && !av1Ok) {
 				continue
 			}
 			qualities = append(qualities, qlabel)
@@ -887,18 +885,28 @@ func (di *DownloadInfo) GetVideoInfo() bool {
 
 				_, vp9Ok := dlUrls[videoItag.VP9]
 				_, h264Ok := dlUrls[videoItag.H264]
+				_, av1Ok := dlUrls[videoItag.AV1]
 
-				if vp9Ok && (di.VP9 || !h264Ok) && !di.H264 { // Sometimes a quality is VP9 only apparently
+				if av1Ok && (di.AV1 || (!h264Ok && !vp9Ok)) && !di.H264 {
+					di.SetDownloadUrl(DtypeVideo, dlUrls[videoItag.AV1])
+					di.Quality = videoItag.AV1
+					found = true
+					LogGeneral("Selected quality: %s (AV1)\n", q)
+					LogTrace("Video URL: %s", dlUrls[videoItag.AV1])
+					break
+				} else if vp9Ok && (di.VP9 || (!h264Ok && !av1Ok)) && !di.H264 { // Sometimes a quality is VP9 only apparently
 					di.SetDownloadUrl(DtypeVideo, dlUrls[videoItag.VP9])
 					di.Quality = videoItag.VP9
 					found = true
 					LogGeneral("Selected quality: %s (VP9)\n", q)
+					LogTrace("Video URL: %s", dlUrls[videoItag.VP9])
 					break
 				} else if h264Ok {
 					di.SetDownloadUrl(DtypeVideo, dlUrls[videoItag.H264])
 					di.Quality = videoItag.H264
 					found = true
 					LogGeneral("Selected quality: %s (h264)\n", q)
+					LogTrace("Video URL: %s", dlUrls[videoItag.H264])
 					break
 				}
 			}

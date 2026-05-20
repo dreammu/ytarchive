@@ -265,9 +265,9 @@ func (di *DownloadInfo) GetNewestStreamFromStreams() string {
 // New PO Token stuff requires calling the API instead of
 // using the URLs from scraping the watch page.
 // Credit to yt-dlp devs for POST data and headers.
-func (di *DownloadInfo) DownloadWebPlayerResponse() (*PlayerResponse, error) {
+func (di *DownloadInfo) DownloadWebAPIPlayerResponse() (*PlayerResponse, error) {
 	if len(di.PoToken) == 0 {
-		return nil, fmt.Errorf("Cannot retrieve web api player response without a PO Token set")
+		return nil, fmt.Errorf("cannot retrieve web api player response without a PO Token set")
 	}
 	pr := &PlayerResponse{}
 	auth := GenerateSAPISIDHash(di.CookiesURL)
