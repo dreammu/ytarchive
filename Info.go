@@ -32,6 +32,8 @@ const (
 	LiveMaximumSeekable = 86400 * 7
 )
 
+const ytdlpInfoPrintTemplate = `{"id":%(id|null)j,"title":%(fulltitle,title|null)j,"channel_id":%(channel_id|null)j,"channel":%(channel|null)j,"description":%(description|null)j,"thumbnail":%(thumbnail|null)j,"upload_date":%(upload_date|null)j,"release_timestamp":%(release_timestamp|null)j,"timestamp":%(timestamp|null)j,"live_status":%(live_status|null)j,"is_live":%(is_live|null)j,"formats":%(formats.:.{format_id,url,protocol,manifest_url,target_duration})j}`
+
 type VideoItag struct {
 	H264 int
 	VP9  int
@@ -527,7 +529,7 @@ func (di *DownloadInfo) GetGvideoUrl(dataType string) {
 
 // Execute yt-dlp command to get stream info
 func (di *DownloadInfo) ExecuteYtdlp() ([]byte, error) {
-	args := []string{"-j", "--extractor-args", "youtube:formats=incomplete"}
+	args := []string{"--live-from-start"}
 
 	// Add cookies parameter
 	if len(cookieFile) > 0 {
@@ -549,12 +551,13 @@ func (di *DownloadInfo) ExecuteYtdlp() ([]byte, error) {
 		customArgs := strings.Fields(di.YtdlpOpts)
 		args = append(args, customArgs...)
 	}
+	args = append(args, "--print", ytdlpInfoPrintTemplate)
 
 	// Add URL
 	args = append(args, di.URL)
 
 	// Execute command with 30 second timeout
-	ctx, cancel := context.WithTimeout(context.Background(), 30 * time.Second)
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
 
 	cmd := exec.CommandContext(ctx, di.YtdlpPath, args...)
@@ -588,76 +591,30 @@ func parseItagFromFormatID(formatID string) int {
 	return itag
 }
 
-func parseSqFromPath(fragmentPath string) int {
-	path := strings.Trim(fragmentPath, "/")
-	parts := strings.Split(path, "/")
-
-	for i := 0; i+1 < len(parts); i++ {
-		if parts[i] == "sq" {
-			if sq, err := strconv.Atoi(parts[i+1]); err == nil {
-				return sq
-			}
-			return -1
-		}
-	}
-	return -1
-}
-
-func parseSqFromURL(fragmentURL string) int {
-	if u, err := url.Parse(fragmentURL); err == nil {
-		return parseSqFromPath(u.Path)
-	}
-	return -1
-}
-
-type YtdlpFragment struct {
-	Path          string `json:"path"`
-	URL           string `json:"url"`
-	FragmentCount int    `json:"fragment_count"`
-}
-
-func parseLastSqFromFragments(fragments []YtdlpFragment) int {
-	for i := len(fragments) - 1; i >= 0; i-- {
-		frag := fragments[i]
-		if sq := parseSqFromPath(frag.Path); sq > 0 {
-			return sq
-		}
-		if frag.FragmentCount > 0 {
-			return frag.FragmentCount
-		}
-		if sq := parseSqFromURL(frag.URL); sq > 0 {
-			return sq
-		}
-	}
-
-	return -1
-}
-
 type YtdlpFormat struct {
-	FormatID        string          `json:"format_id"`
-	URL             string          `json:"url"`
-	Protocol        string          `json:"protocol"`
-	FragmentBaseURL string          `json:"fragment_base_url"`
-	Fragments       []YtdlpFragment `json:"fragments"`
+	FormatID       string  `json:"format_id"`
+	URL            string  `json:"url"`
+	Protocol       string  `json:"protocol"`
+	ManifestURL    string  `json:"manifest_url"`
+	TargetDuration float64 `json:"target_duration"`
 }
 
 type YtdlpExtraction struct {
-	URLs         map[int]string
-	AdaptiveURLs map[int]string
-	DashURLs     map[int]string
-	LastSq       int
-	ID           string
-	Title        string
-	FullTitle    string
-	ChannelID    string
-	Channel      string
-	Description  string
-	Thumbnail    string
-	UploadDate   string
-	StartDate    string
-	StartUnix    int64
-	LiveStatus   string
-	IsLive       bool
+	URLs           map[int]string
+	AdaptiveURLs   map[int]string
+	LastSq         int
+	TargetDuration int
+	ID             string
+	Title          string
+	ChannelID      string
+	Channel        string
+	Description    string
+	Thumbnail      string
+	UploadDate     string
+	StartDate      string
+	StartUnix      int64
+	LiveStatus     string
+	IsLive         bool
 }
 
 func (di *DownloadInfo) seekableStartSqFromLastSq(lastSq int) int {
@@ -704,12 +661,30 @@ func formatLocalUnixTimestamp(timestamp int64) string {
 	return time.Unix(timestamp, 0).Local().Format(time.RFC3339)
 }
 
-func probeLastSqFromURL(baseURL string) int {
-	if baseURL == "" {
+func probeYtdlpAdaptiveSeqBoundary(baseURL string, postLive bool) int {
+	headerSeqnum := probeXHeadSeqnum(baseURL)
+	if headerSeqnum < 0 {
 		return -1
 	}
 
-	req, err := http.NewRequest("GET", baseURL, nil)
+	if postLive {
+		// Post-live base URL probes commonly have an empty body, but the
+		// X-Head-Seqnum header is still available. Use one less than the
+		// header as the exclusive stop boundary so the downloader avoids
+		// the trailing fragments that tend to return 503.
+		if headerSeqnum <= 1 {
+			return -1
+		}
+		return headerSeqnum - 1
+	}
+	return headerSeqnum
+}
+
+func probeXHeadSeqnum(probeURL string) int {
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+
+	req, err := http.NewRequestWithContext(ctx, "GET", probeURL, nil)
 	if err != nil {
 		return -1
 	}
@@ -721,8 +696,9 @@ func probeLastSqFromURL(baseURL string) int {
 		return -1
 	}
 	defer func() {
-		io.Copy(io.Discard, resp.Body)
-		resp.Body.Close()
+		if resp.Body != nil {
+			resp.Body.Close()
+		}
 	}()
 
 	headerSeqnumStr := resp.Header.Get("X-Head-Seqnum")
@@ -770,9 +746,6 @@ func (fi FormatInfo) SetYtdlpInfo(info *YtdlpExtraction, pageURL string) {
 }
 
 func (info *YtdlpExtraction) DisplayTitle() string {
-	if title := strings.TrimSpace(info.FullTitle); title != "" {
-		return title
-	}
 	return strings.TrimSpace(info.Title)
 }
 
@@ -844,36 +817,36 @@ func (di *DownloadInfo) applyYtdlpFormat(info *YtdlpExtraction, format YtdlpForm
 		return
 	}
 
-	if len(format.Fragments) > 0 {
-		if sq := parseLastSqFromFragments(format.Fragments); sq > info.LastSq {
-			info.LastSq = sq
-		}
+	if format.TargetDuration > 0 && info.TargetDuration <= 0 {
+		info.TargetDuration = int(math.Round(format.TargetDuration))
 	}
 
-	if format.Protocol == "http_dash_segments" {
-		if len(format.FragmentBaseURL) > 0 {
-			info.DashURLs[itag] = strings.ReplaceAll(format.FragmentBaseURL, "%", "%%") + "sq/%d"
-		} else if len(format.URL) > 0 {
-			info.DashURLs[itag] = strings.ReplaceAll(format.URL, "%", "%%") + "&sq=%d"
-			if info.LastSq < 0 && !*lastSqProbed {
-				if sq := probeLastSqFromURL(format.URL); sq >= 0 {
-					info.LastSq = sq
-				}
-				*lastSqProbed = true
-			}
-		}
+	if !isYtdlpAdaptiveFormat(format) {
 		return
 	}
 
-	if format.Protocol != "https" || !IsFragmented(format.URL) {
-		return
-	}
 	info.AdaptiveURLs[itag] = strings.ReplaceAll(format.URL, "%", "%%") + "&sq=%d"
 	if info.LastSq < 0 && !*lastSqProbed {
-		if sq := probeLastSqFromURL(format.URL); sq >= 0 {
+		*lastSqProbed = true
+		if sq := probeYtdlpAdaptiveSeqBoundary(format.URL, info.IsPostLive()); sq >= 0 {
 			info.LastSq = sq
 		}
-		*lastSqProbed = true
+	}
+}
+
+func isYtdlpAdaptiveFormat(format YtdlpFormat) bool {
+	if format.URL == "" || !IsFragmented(format.URL) {
+		return false
+	}
+	if format.ManifestURL != "" {
+		return false
+	}
+
+	switch format.Protocol {
+	case "http_dash_segments", "http_dash_segments_generator":
+		return true
+	default:
+		return false
 	}
 }
 
@@ -881,17 +854,14 @@ func (di *DownloadInfo) ParseYtdlpJsonInfo(jsonData []byte) (*YtdlpExtraction, e
 	info := &YtdlpExtraction{
 		URLs:         make(map[int]string),
 		AdaptiveURLs: make(map[int]string),
-		DashURLs:     make(map[int]string),
 		LastSq:       -1,
 	}
 
 	var payload struct {
 		ID               string        `json:"id"`
 		Title            string        `json:"title"`
-		FullTitle        string        `json:"fulltitle"`
 		ChannelID        string        `json:"channel_id"`
 		Channel          string        `json:"channel"`
-		Uploader         string        `json:"uploader"`
 		Description      string        `json:"description"`
 		Thumbnail        string        `json:"thumbnail"`
 		UploadDate       string        `json:"upload_date"`
@@ -908,12 +878,8 @@ func (di *DownloadInfo) ParseYtdlpJsonInfo(jsonData []byte) (*YtdlpExtraction, e
 
 	info.ID = payload.ID
 	info.Title = payload.Title
-	info.FullTitle = payload.FullTitle
 	info.ChannelID = payload.ChannelID
 	info.Channel = payload.Channel
-	if info.Channel == "" {
-		info.Channel = payload.Uploader
-	}
 	info.Description = payload.Description
 	info.Thumbnail = payload.Thumbnail
 	info.UploadDate = payload.UploadDate
@@ -935,28 +901,25 @@ func (di *DownloadInfo) ParseYtdlpJsonInfo(jsonData []byte) (*YtdlpExtraction, e
 	for itag, dlURL := range info.AdaptiveURLs {
 		info.URLs[itag] = dlURL
 	}
-	for itag, dlURL := range info.DashURLs {
-		if _, exists := info.URLs[itag]; !exists {
-			info.URLs[itag] = dlURL
-		}
+	if info.TargetDuration > 0 {
+		di.TargetDuration = info.TargetDuration
 	}
 
 	return info, nil
 }
 
-func (di *DownloadInfo) ParseYtdlpJson(jsonData []byte) (map[int]string, map[int]string, int) {
+func (di *DownloadInfo) ParseYtdlpJson(jsonData []byte) (map[int]string, int) {
 	info, err := di.ParseYtdlpJsonInfo(jsonData)
 	if err != nil {
 		LogDebug("Failed to parse yt-dlp json: %v", err)
-		return map[int]string{}, map[int]string{}, -1
+		return map[int]string{}, -1
 	}
 
-	if len(info.AdaptiveURLs) > 0 || len(info.DashURLs) > 0 {
+	if len(info.AdaptiveURLs) > 0 {
 		LogDebug("Loaded %d adaptive format URLs from yt-dlp", len(info.AdaptiveURLs))
-		LogDebug("Loaded %d dash format URLs from yt-dlp", len(info.DashURLs))
 	}
 
-	return info.AdaptiveURLs, info.DashURLs, info.LastSq
+	return info.AdaptiveURLs, info.LastSq
 }
 
 func (di *DownloadInfo) ParseLiveFromStrVal() error {
@@ -1143,18 +1106,16 @@ func (di *DownloadInfo) ParseInputUrl() error {
 }
 
 /*
-Get download URLs from the adaptive formats or DASH manifest
-Prioritize the adaptive formats from yt-dlp if available, then DASH from yt-dlp,
-then DASH from Web API, then DASH from web page
+Get download URLs from generated adaptive formats extracted by yt-dlp.
 */
 func (di *DownloadInfo) GetDownloadUrls(pr *PlayerResponse) map[int]string {
+	_ = pr
 	urls := make(map[int]string)
 
-	// Priority 1: Try to get URLs from yt-dlp command execution
 	if di.YtdlpPath != "" {
 		jsonData := di.ExecuteYtdlpWithRetry(3)
 		if jsonData != nil {
-			adaptiveUrls, dashUrls, ytdlpLastSq := di.ParseYtdlpJson(jsonData)
+			adaptiveUrls, ytdlpLastSq := di.ParseYtdlpJson(jsonData)
 			if len(adaptiveUrls) > 0 {
 				for itag, url := range adaptiveUrls {
 					urls[itag] = url
@@ -1165,60 +1126,6 @@ func (di *DownloadInfo) GetDownloadUrls(pr *PlayerResponse) map[int]string {
 				}
 
 				return urls
-			}
-
-			if len(dashUrls) > 0 {
-				for itag, url := range dashUrls {
-					urls[itag] = url
-					LogTrace("Setting itag %d from yt-dlp dash formats", itag)
-				}
-				if ytdlpLastSq > 0 {
-					di.LastSq = ytdlpLastSq
-				}
-
-				return urls
-			}
-		}
-	}
-
-	// Priority 2: Fallback to Web API DASH manifest
-	LogDebug("yt-dlp not available or failed, falling back to DASH manifest")
-	WebPlayerResponse, err := di.DownloadWebAPIPlayerResponse()
-	if err != nil {
-		LogDebug("Error getting Web API player response: %s", err.Error())
-	} else {
-		if len(WebPlayerResponse.StreamingData.DashManifestURL) > 0 {
-			LogDebug("Retrieving URLs from Web API DASH manifest")
-			manifest := DownloadData(WebPlayerResponse.StreamingData.DashManifestURL)
-			if len(manifest) > 0 {
-				// we store the LastSq to calculate 7 days past
-				urls, di.LastSq = GetUrlsFromManifest(manifest, di.PoToken)
-			}
-
-			for itag := range urls {
-				LogTrace("Setting itag %d from Web API DASH manifest", itag)
-			}
-		}
-	}
-
-	// Priority 3: Fallback to web page DASH manifest
-	if len(pr.StreamingData.DashManifestURL) > 0 {
-		LogDebug("Retrieving URLs from web page DASH manifest")
-		manifest := DownloadData(pr.StreamingData.DashManifestURL)
-		if len(manifest) > 0 {
-			// we store the LastSq to calculate 7 days past
-			dashUrls, lastSq := GetUrlsFromManifest(manifest, di.PoToken)
-			if lastSq > di.LastSq {
-				di.LastSq = lastSq
-			}
-
-			for itag, url := range dashUrls {
-				if _, ok := urls[itag]; ok { // format exists already
-					continue
-				}
-
-				urls[itag] = url
-				LogTrace("Setting itag %d from web page DASH manifest", itag)
 			}
 		}
 	}
@@ -1687,9 +1594,8 @@ func (di *DownloadInfo) GetVideoInfoFromYtdlp() bool {
 		}
 	}
 
-	if len(ytdlpInfo.AdaptiveURLs) > 0 || len(ytdlpInfo.DashURLs) > 0 {
+	if len(ytdlpInfo.AdaptiveURLs) > 0 {
 		LogDebug("Loaded %d adaptive format URLs from yt-dlp", len(ytdlpInfo.AdaptiveURLs))
-		LogDebug("Loaded %d dash format URLs from yt-dlp", len(ytdlpInfo.DashURLs))
 	}
 
 	selectedQualities := []string{}
