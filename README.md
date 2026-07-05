@@ -4,11 +4,11 @@ This is a forked version based on [Kethsar/ytarchive](https://github.com/Kethsar
 
 ## Differences in this fork
 
-### 1. Using yt-dlp as the primary extractor
+### 1. Using yt-dlp for livestream URL extraction
 - This fork uses yt-dlp to obtain YouTube livestream URLs.
 - With yt-dlp extraction integrated, it's fine not to pass potoken to ytarchive, but you may need to pass potoken to yt-dlp via `--ytdlp-opts` if you don't have a potoken provider.
-- Since [this commit](https://github.com/yt-dlp/yt-dlp/commit/319a2bda83f5e54054661c56c1391533f82473c2), modifying yt-dlp to extract adaptive formats is no longer required. Please update yt-dlp to the latest version.
-- **Note**: If you pass `--extractor-args` to the `youtube` extractor via `--ytdlp-opts`, please ensure that `formats=incomplete` is included in the passed arguments to prevent it from being overridden and causing extraction to fail.
+- Please update yt-dlp to the latest version.
+- `--ytdlp-info` can be used to let yt-dlp extract stream info, while ytarchive only downloads the live fragments.
 
 ### 2. Added support for Visitor Data parameter
 - Added `--visitor-data` parameter, allowing for not passing cookies when providing potoken.
@@ -27,7 +27,7 @@ Attempt to archive a given Youtube livestream from the start. This is most usefu
 
 ## Installation
 
-Download the latest pre-release from [the releases page](https://github.com/Kethsar/ytarchive/releases)
+Download the latest pre-release from [the releases page](https://github.com/dreammu/ytarchive/releases)
 
 Alternatively, if you have Go properly installed and set up, run `go install github.com/dreammu/ytarchive@dev`
 
@@ -333,6 +333,15 @@ Options:
 		Additional options to pass to yt-dlp when retrieving stream URLs.
 		Useful for specifying extractor arguments or other yt-dlp parameters.
 		Example: '--extractor-args youtube:player_client=android'
+
+	--ytdlp-info
+		Use yt-dlp as the info extractor. ytarchive will parse yt-dlp's JSON
+		output and only handle selecting and downloading live fragments.
+		This mode is best used when you already know you can access the stream.
+		If access or playability issues occur, the default extractor may
+		provide more detailed diagnostics.
+		Not compatible with --monitor-channel or --members-only. --potoken
+		and --visitor-data are ignored in this mode.
 
 	--live-from DURATION, TIMESTRING or NOW
 		Starts the download from the specified time in the future, the past or 'now'.

@@ -27,7 +27,7 @@ const (
 const (
 	MajorVersion = 0
 	MinorVersion = 5
-	PatchVersion = 1
+	PatchVersion = 2
 )
 
 var (
@@ -340,6 +340,10 @@ Options:
 		Useful for specifying extractor arguments or other yt-dlp parameters.
 		Example: '--extractor-args youtube:player_client=android'
 
+	--ytdlp-info
+		Use yt-dlp to extract stream info. ytarchive will parse yt-dlp's JSON
+		output and only handle selecting and downloading live fragments.
+
 	--live-from DURATION, TIMESTRING or NOW
 		Starts the download from the specified time in the future, the past or 'now'.
 		Use a negative time value to skip back in time from now.
@@ -441,7 +445,7 @@ var (
 	liveFrom          string
 	startDelayStr     string
 	capDurationStr    string
-	visitorData	      string
+	visitorData       string
 	poToken           string
 	ytdlpPath         string
 	ytdlpOpts         string
@@ -484,6 +488,7 @@ var (
 	vp9               bool
 	av1               bool
 	h264              bool
+	ytdlpInfo         bool
 	membersOnly       bool
 	disableSaveState  bool
 	lookalikeChars    bool
@@ -525,6 +530,7 @@ func init() {
 	cliFlags.BoolVar(&vp9, "vp9", false, "Download VP9 video if available.")
 	cliFlags.BoolVar(&av1, "av1", false, "Download AV1 video if available. Takes priority.")
 	cliFlags.BoolVar(&h264, "h264", false, "Only download h264 qualities.")
+	cliFlags.BoolVar(&ytdlpInfo, "ytdlp-info", false, "Use yt-dlp to extract stream info and ytarchive to download fragments.")
 	cliFlags.BoolVar(&addMeta, "add-metadata", false, "Write metadata to the final file.")
 	cliFlags.BoolVar(&writeDesc, "write-description", false, "Write description to a separate file.")
 	cliFlags.BoolVar(&writeThumbnail, "write-thumbnail", false, "Write thumbnail to a separate file.")
@@ -631,6 +637,7 @@ func run() int {
 	info.VP9 = vp9
 	info.AV1 = av1
 	info.H264 = h264
+	info.YtdlpInfo = ytdlpInfo
 	info.RetrySecs = retrySecs
 	info.FragMaxTries = fragMaxTries
 	info.MembersOnly = membersOnly
@@ -730,6 +737,20 @@ func run() int {
 	if err != nil {
 		LogError("%s", err.Error())
 		return 1
+	}
+
+	if info.YtdlpInfo && !info.GVideoDDL {
+		if monitorChannel {
+			LogError("--ytdlp-info is not compatible with --monitor-channel. yt-dlp info extraction handles one URL at a time, while channel monitoring depends on ytarchive's channel polling logic.")
+			return 1
+		}
+		if membersOnly {
+			LogError("--ytdlp-info is not compatible with --members-only. Use cookies and a direct member stream URL instead.")
+			return 1
+		}
+		if poToken != "" || visitorData != "" {
+			LogWarn("--potoken and --visitor-data are ignored by --ytdlp-info; pass yt-dlp PO token options through --ytdlp-opts if needed.")
+		}
 	}
 
 	_, err = FormatFilename(fnameFormat, info.FormatInfo, lookalikeChars)
