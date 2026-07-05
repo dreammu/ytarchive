@@ -428,20 +428,7 @@ func (di *DownloadInfo) GetPlayablePlayerResponse() (retrieved int, pr *PlayerRe
 				time.Sleep(time.Duration(di.RetrySecs) * time.Second)
 				liveWaited += di.RetrySecs
 				retryCount += 1
-				if loglevel > LoglevelQuiet {
-					msg := "Retries: %d (Last retry: %s), Total time waited: %d seconds"
-					if !statusNewlines {
-						msg = "\r" + msg
-					} else {
-						msg = msg + "\n"
-					}
-
-					fmt.Fprintf(os.Stderr, msg,
-						retryCount,
-						time.Now().Format("2006/01/02 15:04:05"),
-						liveWaited,
-					)
-				}
+				LogRetryStatus(retryCount, liveWaited)
 				continue
 			}
 
@@ -481,11 +468,17 @@ func (di *DownloadInfo) GetPlayablePlayerResponse() (retrieved int, pr *PlayerRe
 			return PlayerResponseNotUsable, nil, nil
 		}
 
+		if !di.InfoPrinted && len(pr.VideoDetails.Title) > 0 && len(pr.VideoDetails.Author) > 0 {
+			LogGeneral("Channel: %s\n", pr.VideoDetails.Author)
+			LogGeneral("Video Title: %s\n", pr.VideoDetails.Title)
+			di.InfoPrinted = true
+		}
+
 		if len(pr.PlayabilityStatus.LiveStreamability.LiveStreamabilityRenderer.VideoID) == 0 && !pr.VideoDetails.IsLiveContent {
 			if di.Live {
 				di.Live = false
 			} else {
-				LogError("%s is not a livestream. It would be better to use yt-dlp to download it.", di.URL)
+				LogError("This video is not a livestream. It would be better to use yt-dlp to download it.")
 			}
 
 			return PlayerResponseNotUsable, nil, nil
@@ -534,16 +527,28 @@ func (di *DownloadInfo) GetPlayablePlayerResponse() (retrieved int, pr *PlayerRe
 			}
 
 			if firstWait && di.Wait == ActionAsk && di.RetrySecs == 0 {
+				if !di.InfoPrinted && len(pr.VideoDetails.Title) > 0 && len(pr.VideoDetails.Author) > 0 {
+					LogGeneral("Channel: %s\n", pr.VideoDetails.Author)
+					LogGeneral("Video Title: %s\n", pr.VideoDetails.Title)
+					di.InfoPrinted = true
+				}
 				if !di.AskWaitForStream() {
 					return PlayerResponseNotUsable, nil, nil
 				}
 			}
 
 			if firstWait {
+				infoPrinted := di.InfoPrinted
 				if !(isLiveURL && di.RetrySecs > 0) {
-					di.printChannelAndTitle(pr)
+					if !di.InfoPrinted && len(pr.VideoDetails.Title) > 0 && len(pr.VideoDetails.Author) > 0 {
+						LogGeneral("Channel: %s\n", pr.VideoDetails.Author)
+						LogGeneral("Video Title: %s\n", pr.VideoDetails.Title)
+						di.InfoPrinted = true
+					}
 				}
-				fmt.Fprintln(os.Stderr)
+				if !infoPrinted && di.InfoPrinted {
+					fmt.Fprintln(os.Stderr)
+				}
 				if len(selectedQualities) < 1 {
 					selectedQualities = GetQualityFromUser(VideoQualities, true)
 				}
@@ -558,20 +563,7 @@ func (di *DownloadInfo) GetPlayablePlayerResponse() (retrieved int, pr *PlayerRe
 				time.Sleep(time.Duration(di.RetrySecs) * time.Second)
 				liveWaited += di.RetrySecs
 				retryCount += 1
-				if loglevel > LoglevelQuiet {
-					msg := "Retries: %d (Last retry: %s), Total time waited: %d seconds"
-					if !statusNewlines {
-						msg = "\r" + msg
-					} else {
-						msg = msg + "\n"
-					}
-
-					fmt.Fprintf(os.Stderr, msg,
-						retryCount,
-						time.Now().Format("2006/01/02 15:04:05"),
-						liveWaited,
-					)
-				}
+				LogRetryStatus(retryCount, liveWaited)
 				continue
 			}
 
@@ -597,7 +589,7 @@ func (di *DownloadInfo) GetPlayablePlayerResponse() (retrieved int, pr *PlayerRe
 				secsLate = 0
 
 				LogGeneral("Stream starts at %s in %d seconds. ",
-					pr.Microformat.PlayerMicroformatRenderer.LiveBroadcastDetails.StartTimestamp,
+					formatLocalTimestamp(pr.Microformat.PlayerMicroformatRenderer.LiveBroadcastDetails.StartTimestamp),
 					slepTime)
 				LogGeneral("Waiting for this time to elapse...")
 
@@ -639,7 +631,11 @@ func (di *DownloadInfo) GetPlayablePlayerResponse() (retrieved int, pr *PlayerRe
 				continue
 			}
 
-			di.printChannelAndTitle(pr)
+			if !di.InfoPrinted && len(pr.VideoDetails.Title) > 0 && len(pr.VideoDetails.Author) > 0 {
+				LogGeneral("Channel: %s\n", pr.VideoDetails.Author)
+				LogGeneral("Video Title: %s\n", pr.VideoDetails.Title)
+				di.InfoPrinted = true
+			}
 			streamData := pr.StreamingData
 			liveDetails := pr.Microformat.PlayerMicroformatRenderer.LiveBroadcastDetails
 			isLive := liveDetails.IsLiveNow
@@ -652,16 +648,11 @@ func (di *DownloadInfo) GetPlayablePlayerResponse() (retrieved int, pr *PlayerRe
 				*/
 				if len(liveDetails.EndTimestamp) > 0 {
 					if len(streamData.AdaptiveFormats) > 0 {
-						// Assume that all formats will be fully processed if one is, and vice versa
-						if len(streamData.AdaptiveFormats[0].URL) == 0 {
-							LogGeneral("Livestream has ended and is being processed. Download URLs not available.")
-							return PlayerResponseNotUsable, nil, nil
-						}
-
 						if !IsFragmented(streamData.AdaptiveFormats[0].URL) {
 							LogGeneral("Livestream has been processed. Use yt-dlp instead.")
 							return PlayerResponseNotUsable, nil, nil
 						}
+
 					} else {
 						LogGeneral("Livestream has ended and is being processed. Download URLs not available.")
 						return PlayerResponseNotUsable, nil, nil

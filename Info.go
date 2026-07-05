@@ -157,12 +157,12 @@ Miscellaneous information
 */
 type DownloadInfo struct {
 	sync.RWMutex
-	FormatInfo FormatInfo
-	Metadata   MetaInfo
-	CookiesURL *url.URL
-	Ytcfg      *YTCFG
+	FormatInfo  FormatInfo
+	Metadata    MetaInfo
+	CookiesURL  *url.URL
+	Ytcfg       *YTCFG
 	VisitorData string
-	PoToken    string
+	PoToken     string
 
 	Stopping         bool
 	InProgress       bool
@@ -170,6 +170,7 @@ type DownloadInfo struct {
 	VP9              bool
 	H264             bool
 	AV1              bool
+	YtdlpInfo        bool
 	Unavailable      bool
 	GVideoDDL        bool
 	FragFiles        bool
@@ -243,13 +244,13 @@ func NewFormatInfo() FormatInfo {
 		"channel":      "",
 		"upload_date":  "",
 		"start_date":   "",
-		"year":   "",
-		"month":   "",
-		"day":   "",
+		"year":         "",
+		"month":        "",
+		"day":          "",
 		"start_time":   "",
-		"hours":   "",
-		"minutes":   "",
-		"seconds":   "",
+		"hours":        "",
+		"minutes":      "",
+		"seconds":      "",
 		"publish_date": "",
 		"description":  "",
 		"url":          "",
@@ -422,18 +423,17 @@ func (mi MetaInfo) SetInfo(fi FormatInfo) {
 	}
 }
 
-func (di *DownloadInfo) printChannelAndTitle(pr *PlayerResponse) {
-	if di.InfoPrinted {
+func LogRetryStatus(retryCount int, totalWaited int) {
+	if loglevel <= LoglevelQuiet {
 		return
 	}
-
-	if len(pr.VideoDetails.Title) == 0 || len(pr.VideoDetails.Author) == 0 {
-		return
+	msg := "Retries: %d (Last retry: %s), Total time waited: %d seconds"
+	if !statusNewlines {
+		msg = "\r" + msg
+	} else {
+		msg += "\n"
 	}
-
-	LogGeneral("Channel: %s\n", pr.VideoDetails.Author)
-	LogGeneral("Video Title: %s\n", pr.VideoDetails.Title)
-	di.InfoPrinted = true
+	fmt.Fprintf(os.Stderr, msg, retryCount, time.Now().Format("2006/01/02 15:04:05"), totalWaited)
 }
 
 func (di *DownloadInfo) printStatusWithoutLock() {
@@ -477,12 +477,13 @@ func (di *DownloadInfo) SaveState(itag int) {
 // Ask if the user wants to wait for a scheduled stream to start and then record it
 func (di *DownloadInfo) AskWaitForStream() bool {
 	LogGeneral("%s\n%s\n",
-		fmt.Sprintf("%s is likely a future scheduled livestream.", di.URL),
+		"This stream is likely a future scheduled livestream.",
 		"Would you like to wait for the scheduled start time, poll until it starts, or not wait?",
 	)
 	choice := strings.ToLower(GetUserInput("wait/poll/[no]: "))
 
 	if strings.HasPrefix(choice, "wait") {
+		di.Wait = ActionDo
 		return true
 	} else if strings.HasPrefix(choice, "poll") {
 		secs := GetUserInput("Input poll interval in seconds (minimum 15): ")
@@ -538,6 +539,10 @@ func (di *DownloadInfo) ExecuteYtdlp() ([]byte, error) {
 		args = append(args, "--proxy", proxyUrl.String())
 	}
 
+	if di.YtdlpInfo {
+		args = append(args, "--ignore-no-formats-error")
+	}
+
 	// Add custom yt-dlp options
 	if len(di.YtdlpOpts) > 0 {
 		// Split the options string by spaces, respecting quoted strings
@@ -558,19 +563,16 @@ func (di *DownloadInfo) ExecuteYtdlp() ([]byte, error) {
 	return output, err
 }
 
-// Execute yt-dlp with retry logic (max 3 attempts)
+// Execute yt-dlp with retry logic
 func (di *DownloadInfo) ExecuteYtdlpWithRetry(maxRetries int) []byte {
-	for i := 0; i < maxRetries; i++ {
-		LogDebug("Executing yt-dlp (attempt %d/%d)", i+1, maxRetries)
-
+	for attempt := 1; attempt <= maxRetries; attempt++ {
 		output, err := di.ExecuteYtdlp()
 		if err == nil {
-			LogDebug("Successfully retrieved stream info from yt-dlp")
 			return output
 		}
 
-		LogWarn("yt-dlp attempt %d/%d failed: %v", i+1, maxRetries, err)
-		if i < maxRetries-1 {
+		LogWarn("yt-dlp attempt %d/%d failed: %v", attempt, maxRetries, err)
+		if attempt < maxRetries {
 			time.Sleep(2 * time.Second)
 		}
 	}
@@ -608,11 +610,13 @@ func parseSqFromURL(fragmentURL string) int {
 	return -1
 }
 
-func parseLastSqFromFragments(fragments []struct {
+type YtdlpFragment struct {
 	Path          string `json:"path"`
 	URL           string `json:"url"`
 	FragmentCount int    `json:"fragment_count"`
-}) int {
+}
+
+func parseLastSqFromFragments(fragments []YtdlpFragment) int {
 	for i := len(fragments) - 1; i >= 0; i-- {
 		frag := fragments[i]
 		if sq := parseSqFromPath(frag.Path); sq > 0 {
@@ -629,57 +633,330 @@ func parseLastSqFromFragments(fragments []struct {
 	return -1
 }
 
-func (di *DownloadInfo) ParseYtdlpJson(jsonData []byte) (map[int]string, map[int]string, int) {
-	adaptiveUrls := make(map[int]string)
-	dashUrls := make(map[int]string)
-	lastSq := -1
+type YtdlpFormat struct {
+	FormatID        string          `json:"format_id"`
+	URL             string          `json:"url"`
+	Protocol        string          `json:"protocol"`
+	FragmentBaseURL string          `json:"fragment_base_url"`
+	Fragments       []YtdlpFragment `json:"fragments"`
+}
+
+type YtdlpExtraction struct {
+	URLs         map[int]string
+	AdaptiveURLs map[int]string
+	DashURLs     map[int]string
+	LastSq       int
+	ID           string
+	Title        string
+	FullTitle    string
+	ChannelID    string
+	Channel      string
+	Description  string
+	Thumbnail    string
+	UploadDate   string
+	StartDate    string
+	StartUnix    int64
+	LiveStatus   string
+	IsLive       bool
+}
+
+func (di *DownloadInfo) seekableStartSqFromLastSq(lastSq int) int {
+	if lastSq < 0 || di.TargetDuration <= 0 {
+		return 0
+	}
+
+	startSq := lastSq - (LiveMaximumSeekable / di.TargetDuration)
+	if startSq < 0 {
+		return 0
+	}
+	return startSq
+}
+
+func formatUnixDate(timestamp int64) (date, clock, year, month, day, hours, minutes, seconds string) {
+	if timestamp <= 0 {
+		return "", "", "", "", "", "", "", ""
+	}
+
+	t := time.Unix(timestamp, 0).UTC()
+	date = t.Format("20060102")
+	clock = t.Format("150405")
+	return date, clock, t.Format("2006"), t.Format("01"), t.Format("02"), t.Format("15"), t.Format("04"), t.Format("05")
+}
+
+func formatLocalTimestamp(timestamp string) string {
+	timestamp = strings.TrimSpace(timestamp)
+	if timestamp == "" {
+		return ""
+	}
+
+	t, err := time.Parse(time.RFC3339Nano, timestamp)
+	if err != nil {
+		return timestamp
+	}
+	return t.Local().Format(time.RFC3339)
+}
+
+func formatLocalUnixTimestamp(timestamp int64) string {
+	if timestamp <= 0 {
+		return ""
+	}
+
+	return time.Unix(timestamp, 0).Local().Format(time.RFC3339)
+}
+
+func probeLastSqFromURL(baseURL string) int {
+	if baseURL == "" {
+		return -1
+	}
+
+	req, err := http.NewRequest("GET", baseURL, nil)
+	if err != nil {
+		return -1
+	}
+	req.Header.Add("User-Agent", "Mozilla/5.0 (X11; Linux x86_64; rv:152.0) Gecko/20100101 Firefox/152.0")
+	req.Header.Add("Origin", "https://www.youtube.com")
+
+	resp, err := client.Do(req)
+	if err != nil {
+		return -1
+	}
+	defer func() {
+		io.Copy(io.Discard, resp.Body)
+		resp.Body.Close()
+	}()
+
+	headerSeqnumStr := resp.Header.Get("X-Head-Seqnum")
+	if headerSeqnumStr == "" {
+		return -1
+	}
+	lastSq, err := strconv.Atoi(headerSeqnumStr)
+	if err != nil {
+		return -1
+	}
+	return lastSq
+}
+
+func (fi FormatInfo) SetYtdlpInfo(info *YtdlpExtraction, pageURL string) {
+	date := info.UploadDate
+	startDate := info.StartDate
+	year, month, day := "", "", ""
+	hours, minutes, seconds := "", "", ""
+	startTime := ""
+
+	if info.StartUnix > 0 {
+		startDate, startTime, year, month, day, hours, minutes, seconds = formatUnixDate(info.StartUnix)
+	} else if len(startDate) >= 8 {
+		year = startDate[:4]
+		month = startDate[4:6]
+		day = startDate[6:8]
+	}
+
+	fi["id"] = info.ID
+	fi["url"] = pageURL
+	fi["title"] = strings.TrimSpace(info.DisplayTitle())
+	fi["channel_id"] = info.ChannelID
+	fi["channel"] = info.Channel
+	fi["upload_date"] = date
+	fi["start_date"] = startDate
+	fi["year"] = year
+	fi["month"] = month
+	fi["day"] = day
+	fi["start_time"] = startTime
+	fi["hours"] = hours
+	fi["minutes"] = minutes
+	fi["seconds"] = seconds
+	fi["publish_date"] = date
+	fi["description"] = strings.TrimSpace(info.Description)
+}
+
+func (info *YtdlpExtraction) DisplayTitle() string {
+	if title := strings.TrimSpace(info.FullTitle); title != "" {
+		return title
+	}
+	return strings.TrimSpace(info.Title)
+}
+
+func (info *YtdlpExtraction) IsUpcoming() bool {
+	return info.LiveStatus == "is_upcoming"
+}
+
+func (info *YtdlpExtraction) IsProcessedVOD() bool {
+	return info.LiveStatus == "was_live"
+}
+
+func (info *YtdlpExtraction) IsNotLive() bool {
+	return info.LiveStatus == "not_live"
+}
+
+func (info *YtdlpExtraction) IsPostLive() bool {
+	return info.LiveStatus == "post_live"
+}
+
+func (di *DownloadInfo) FinishYtdlpLiveRefresh(message string) bool {
+	di.Lock()
+	defer di.Unlock()
+
+	if !di.InProgress {
+		LogGeneral("%s", message)
+		return false
+	}
+
+	LogDebug("%s", message)
+	di.Live = false
+	return false
+}
+
+func (di *DownloadInfo) YtdlpWaitInterval(info *YtdlpExtraction) (time.Duration, bool) {
+	if di.Wait == ActionDoNot {
+		return 0, false
+	}
+	if di.RetrySecs > 0 {
+		return time.Duration(di.RetrySecs) * time.Second, true
+	}
+
+	switch di.Wait {
+	case ActionDo:
+		if info != nil && info.StartUnix > 0 {
+			if interval := time.Until(time.Unix(info.StartUnix, 0)); interval > 0 {
+				return interval, true
+			}
+		}
+		return DefaultPollTime * time.Second, true
+	default:
+		if !di.AskWaitForStream() {
+			return 0, false
+		}
+		if di.RetrySecs > 0 {
+			return time.Duration(di.RetrySecs) * time.Second, true
+		}
+		if info != nil && info.StartUnix > 0 {
+			if interval := time.Until(time.Unix(info.StartUnix, 0)); interval > 0 {
+				return interval, true
+			}
+		}
+		return DefaultPollTime * time.Second, true
+	}
+}
+
+func (di *DownloadInfo) applyYtdlpFormat(info *YtdlpExtraction, format YtdlpFormat, lastSqProbed *bool) {
+	itag := parseItagFromFormatID(format.FormatID)
+	if itag == 0 {
+		return
+	}
+
+	if len(format.Fragments) > 0 {
+		if sq := parseLastSqFromFragments(format.Fragments); sq > info.LastSq {
+			info.LastSq = sq
+		}
+	}
+
+	if format.Protocol == "http_dash_segments" {
+		if len(format.FragmentBaseURL) > 0 {
+			info.DashURLs[itag] = strings.ReplaceAll(format.FragmentBaseURL, "%", "%%") + "sq/%d"
+		} else if len(format.URL) > 0 {
+			info.DashURLs[itag] = strings.ReplaceAll(format.URL, "%", "%%") + "&sq=%d"
+			if info.LastSq < 0 && !*lastSqProbed {
+				if sq := probeLastSqFromURL(format.URL); sq >= 0 {
+					info.LastSq = sq
+				}
+				*lastSqProbed = true
+			}
+		}
+		return
+	}
+
+	if format.Protocol != "https" || !IsFragmented(format.URL) {
+		return
+	}
+	info.AdaptiveURLs[itag] = strings.ReplaceAll(format.URL, "%", "%%") + "&sq=%d"
+	if info.LastSq < 0 && !*lastSqProbed {
+		if sq := probeLastSqFromURL(format.URL); sq >= 0 {
+			info.LastSq = sq
+		}
+		*lastSqProbed = true
+	}
+}
+
+func (di *DownloadInfo) ParseYtdlpJsonInfo(jsonData []byte) (*YtdlpExtraction, error) {
+	info := &YtdlpExtraction{
+		URLs:         make(map[int]string),
+		AdaptiveURLs: make(map[int]string),
+		DashURLs:     make(map[int]string),
+		LastSq:       -1,
+	}
 
 	var payload struct {
-		Formats []struct {
-			FormatID        string `json:"format_id"`
-			URL             string `json:"url"`
-			Protocol        string `json:"protocol"`
-			FragmentBaseURL string `json:"fragment_base_url"`
-			Fragments       []struct {
-				Path          string `json:"path"`
-				URL           string `json:"url"`
-				FragmentCount int    `json:"fragment_count"`
-			} `json:"fragments"`
-		} `json:"formats"`
+		ID               string        `json:"id"`
+		Title            string        `json:"title"`
+		FullTitle        string        `json:"fulltitle"`
+		ChannelID        string        `json:"channel_id"`
+		Channel          string        `json:"channel"`
+		Uploader         string        `json:"uploader"`
+		Description      string        `json:"description"`
+		Thumbnail        string        `json:"thumbnail"`
+		UploadDate       string        `json:"upload_date"`
+		ReleaseTimestamp int64         `json:"release_timestamp"`
+		Timestamp        int64         `json:"timestamp"`
+		LiveStatus       string        `json:"live_status"`
+		IsLive           bool          `json:"is_live"`
+		Formats          []YtdlpFormat `json:"formats"`
 	}
 
 	if err := json.Unmarshal(jsonData, &payload); err != nil {
-		LogDebug("Failed to parse yt-dlp json: %v", err)
-		return adaptiveUrls, dashUrls, lastSq
+		return nil, err
 	}
 
+	info.ID = payload.ID
+	info.Title = payload.Title
+	info.FullTitle = payload.FullTitle
+	info.ChannelID = payload.ChannelID
+	info.Channel = payload.Channel
+	if info.Channel == "" {
+		info.Channel = payload.Uploader
+	}
+	info.Description = payload.Description
+	info.Thumbnail = payload.Thumbnail
+	info.UploadDate = payload.UploadDate
+	info.LiveStatus = payload.LiveStatus
+	info.IsLive = payload.IsLive || payload.LiveStatus == "is_live"
+	if payload.ReleaseTimestamp > 0 {
+		info.StartUnix = payload.ReleaseTimestamp
+		info.StartDate, _, _, _, _, _, _, _ = formatUnixDate(payload.ReleaseTimestamp)
+	} else if payload.Timestamp > 0 {
+		info.StartUnix = payload.Timestamp
+		info.StartDate, _, _, _, _, _, _, _ = formatUnixDate(payload.Timestamp)
+	}
+
+	lastSqProbed := false
 	for _, format := range payload.Formats {
-		if format.Protocol == "http_dash_segments" {
-			if sq := parseLastSqFromFragments(format.Fragments); sq > lastSq {
-				lastSq = sq
-			}
+		di.applyYtdlpFormat(info, format, &lastSqProbed)
+	}
 
-			itag := parseItagFromFormatID(format.FormatID)
-			baseUrl := format.FragmentBaseURL
-			dashUrls[itag] = strings.ReplaceAll(baseUrl, "%", "%%") + "sq/%d"
-			continue
+	for itag, dlURL := range info.AdaptiveURLs {
+		info.URLs[itag] = dlURL
+	}
+	for itag, dlURL := range info.DashURLs {
+		if _, exists := info.URLs[itag]; !exists {
+			info.URLs[itag] = dlURL
 		}
-
-		if format.Protocol != "https" {
-			continue
-		}
-		itag := parseItagFromFormatID(format.FormatID)
-		adaptiveUrls[itag] = strings.ReplaceAll(format.URL, "%", "%%") + "&sq=%d"
 	}
 
-	if len(adaptiveUrls) > 0 {
-		LogDebug("Loaded %d adaptive format URLs from yt-dlp", len(adaptiveUrls))
-	}
-	if len(dashUrls) > 0 {
-		LogDebug("Loaded %d dash format URLs from yt-dlp", len(dashUrls))
+	return info, nil
+}
+
+func (di *DownloadInfo) ParseYtdlpJson(jsonData []byte) (map[int]string, map[int]string, int) {
+	info, err := di.ParseYtdlpJsonInfo(jsonData)
+	if err != nil {
+		LogDebug("Failed to parse yt-dlp json: %v", err)
+		return map[int]string{}, map[int]string{}, -1
 	}
 
-	return adaptiveUrls, dashUrls, lastSq
+	if len(info.AdaptiveURLs) > 0 || len(info.DashURLs) > 0 {
+		LogDebug("Loaded %d adaptive format URLs from yt-dlp", len(info.AdaptiveURLs))
+		LogDebug("Loaded %d dash format URLs from yt-dlp", len(info.DashURLs))
+	}
+
+	return info.AdaptiveURLs, info.DashURLs, info.LastSq
 }
 
 func (di *DownloadInfo) ParseLiveFromStrVal() error {
@@ -862,7 +1139,7 @@ func (di *DownloadInfo) ParseInputUrl() error {
 		return nil
 	}
 
-	return fmt.Errorf("%s is not a known valid youtube URL", di.URL)
+	return errors.New("The provided URL is not a known valid YouTube URL")
 }
 
 /*
@@ -879,7 +1156,6 @@ func (di *DownloadInfo) GetDownloadUrls(pr *PlayerResponse) map[int]string {
 		if jsonData != nil {
 			adaptiveUrls, dashUrls, ytdlpLastSq := di.ParseYtdlpJson(jsonData)
 			if len(adaptiveUrls) > 0 {
-				LogDebug("Using yt-dlp adaptive formats as primary source")
 				for itag, url := range adaptiveUrls {
 					urls[itag] = url
 					LogTrace("Setting itag %d from yt-dlp adaptive formats", itag)
@@ -892,7 +1168,6 @@ func (di *DownloadInfo) GetDownloadUrls(pr *PlayerResponse) map[int]string {
 			}
 
 			if len(dashUrls) > 0 {
-				LogDebug("Using yt-dlp dash formats as fallback")
 				for itag, url := range dashUrls {
 					urls[itag] = url
 					LogTrace("Setting itag %d from yt-dlp dash formats", itag)
@@ -1022,45 +1297,7 @@ func (di *DownloadInfo) GetCodecPriorityOrder() []string {
 	return order
 }
 
-// Get necessary video info such as video/audio URLs
-func (di *DownloadInfo) GetVideoInfo() bool {
-	di.Lock()
-	defer di.Unlock()
-
-	/*
-		No point retrieving information if we know it's not available, or there
-		is nothing useful to be gotten
-	*/
-	if di.GVideoDDL || di.Stopping || di.Unavailable {
-		return false
-	}
-
-	// Almost nothing we care about is likely to change in 15 seconds
-	delta := time.Since(di.LastUpdated)
-	if delta < (DefaultPollTime * time.Second) {
-		return false
-	}
-
-	retrieved, pr, selQaulities := di.GetPlayablePlayerResponse()
-	di.LastUpdated = time.Now()
-	if retrieved == PlayerResponseNotFound {
-		di.Live = false
-		di.Unavailable = true
-		return false
-	} else if retrieved == PlayerResponseNotUsable {
-		return false
-	}
-
-	streamData := pr.StreamingData
-	pmfr := pr.Microformat.PlayerMicroformatRenderer
-	isLive := pmfr.LiveBroadcastDetails.IsLiveNow
-
-	targetDur := int(streamData.AdaptiveFormats[0].TargetDurationSec)
-	if targetDur > 0 {
-		di.TargetDuration = targetDur
-	}
-	dlUrls := di.GetDownloadUrls(pr)
-
+func (di *DownloadInfo) SelectDownloadFormats(dlUrls map[int]string, selectedQualities []string) bool {
 	if len(dlUrls) == 0 {
 		LogError("No download URLs found")
 		return false
@@ -1101,11 +1338,11 @@ func (di *DownloadInfo) GetVideoInfo() bool {
 		}
 
 		for !found {
-			if len(selQaulities) == 0 {
-				selQaulities = GetQualityFromUser(qualities, false)
+			if len(selectedQualities) == 0 {
+				selectedQualities = GetQualityFromUser(qualities, false)
 			}
 
-			for _, q := range selQaulities {
+			for _, q := range selectedQualities {
 				q = strings.TrimSpace(q)
 
 				if q == "best" {
@@ -1160,7 +1397,6 @@ func (di *DownloadInfo) GetVideoInfo() bool {
 						}
 					}
 					url, ok := dlUrls[itag]
-					LogDebug("Codec availability: %s itag=%d ok=%v", strings.ToUpper(codec), itag, ok)
 					if !ok {
 						continue
 					}
@@ -1186,7 +1422,7 @@ func (di *DownloadInfo) GetVideoInfo() bool {
 			if !found {
 				LogGeneral("The qualities you selected ended up unavailable for this stream")
 				LogGeneral("You will now have the option to select from the available qualities")
-				selQaulities = selQaulities[len(selQaulities):]
+				selectedQualities = selectedQualities[len(selectedQualities):]
 			}
 		}
 	} else {
@@ -1205,8 +1441,332 @@ func (di *DownloadInfo) GetVideoInfo() bool {
 		}
 	}
 
+	if !di.VideoOnly && !di.AudioOnly && len(di.GetDownloadUrl(DtypeAudio)) == 0 {
+		LogError("No audio download URL selected")
+		return false
+	}
+	if !di.AudioOnly && len(di.GetDownloadUrl(DtypeVideo)) == 0 {
+		LogError("No video download URL selected")
+		return false
+	}
+
+	return true
+}
+
+func (di *DownloadInfo) shouldUpdateVideoInfo() bool {
+	di.RLock()
+	defer di.RUnlock()
+
+	if di.GVideoDDL || di.Stopping || di.Unavailable {
+		return false
+	}
+
+	return time.Since(di.LastUpdated) >= (DefaultPollTime * time.Second)
+}
+
+func (di *DownloadInfo) waitForYtdlpRetry(interval time.Duration) bool {
+	if interval <= 0 {
+		return !di.IsStopping()
+	}
+
+	timer := time.NewTimer(interval)
+	defer timer.Stop()
+
+	ticker := time.NewTicker(time.Second)
+	defer ticker.Stop()
+
+	for {
+		select {
+		case <-timer.C:
+			return !di.IsStopping()
+		case <-ticker.C:
+			if di.IsStopping() {
+				return false
+			}
+		}
+	}
+}
+
+type ytdlpWaitStatus struct {
+	RetryCount      int
+	TotalWaited     int
+	PollingAnnounce bool
+}
+
+func (di *DownloadInfo) GetVideoInfoFromYtdlp() bool {
+	if !di.shouldUpdateVideoInfo() {
+		return false
+	}
+
+	var ytdlpInfo *YtdlpExtraction
+	waitStatus := &ytdlpWaitStatus{}
+	infoRetries := 0
+	retryInfo := func(message string) bool {
+		if infoRetries >= 3 {
+			return false
+		}
+
+		infoRetries += 1
+		LogWarn("%s (Retry %d/%d)", message, infoRetries, 3)
+		client.CloseIdleConnections()
+		return true
+	}
+	failInfo := func(message string) bool {
+		di.Lock()
+		inProgress := di.InProgress
+		if inProgress {
+			di.Live = false
+			di.Unavailable = true
+		}
+		di.Unlock()
+
+		if inProgress {
+			LogWarn("%s", message)
+		} else {
+			LogError("%s", message)
+		}
+		return false
+	}
+	for {
+		for {
+			jsonData := di.ExecuteYtdlpWithRetry(3)
+			di.Lock()
+			di.LastUpdated = time.Now()
+			if jsonData == nil {
+				di.Live = false
+				di.Unavailable = true
+				di.Unlock()
+				return false
+			}
+			stopping := di.Stopping
+			di.Unlock()
+			if stopping {
+				return false
+			}
+
+			var err error
+			ytdlpInfo, err = di.ParseYtdlpJsonInfo(jsonData)
+			if err != nil {
+				message := fmt.Sprintf("Failed to parse yt-dlp JSON: %s", err)
+				if retryInfo(message) {
+					continue
+				}
+				return failInfo(message)
+			}
+
+			if !ytdlpInfo.IsUpcoming() {
+				break
+			}
+
+			di.Lock()
+			if !di.InfoPrinted {
+				if ytdlpInfo.Channel != "" {
+					LogGeneral("Channel: %s\n", ytdlpInfo.Channel)
+				}
+				if title := ytdlpInfo.DisplayTitle(); title != "" {
+					LogGeneral("Video Title: %s\n", title)
+				}
+				di.InfoPrinted = true
+			}
+			di.Unlock()
+
+			interval, ok := di.YtdlpWaitInterval(ytdlpInfo)
+			if !ok {
+				return false
+			}
+
+			seconds := int(interval.Seconds())
+			if seconds < 1 {
+				seconds = 1
+			}
+
+			polling := true
+			if di.RetrySecs > 0 {
+				if !waitStatus.PollingAnnounce {
+					LogGeneral("Waiting for stream, retrying every %d seconds...\n", seconds)
+					waitStatus.PollingAnnounce = true
+				}
+			} else if ytdlpInfo.StartUnix > 0 {
+				if time.Until(time.Unix(ytdlpInfo.StartUnix, 0)) > 0 {
+					LogGeneral("Stream starts at %s in %d seconds. ", formatLocalUnixTimestamp(ytdlpInfo.StartUnix), seconds)
+					LogGeneral("Waiting for this time to elapse...")
+					polling = false
+				} else if !waitStatus.PollingAnnounce {
+					LogGeneral("Stream should have started. Checking back every %d seconds\n", seconds)
+					waitStatus.PollingAnnounce = true
+				}
+			} else {
+				LogGeneral("Waiting %s before retrying yt-dlp...", SecondsToDurationAndTimeStr(seconds))
+			}
+
+			if !di.waitForYtdlpRetry(interval) {
+				return false
+			}
+			if polling {
+				waitStatus.RetryCount += 1
+				waitStatus.TotalWaited += int(interval.Seconds())
+				LogRetryStatus(waitStatus.RetryCount, waitStatus.TotalWaited)
+			}
+		}
+
+		di.Lock()
+		if !di.InfoPrinted {
+			if ytdlpInfo.Channel != "" {
+				LogGeneral("Channel: %s\n", ytdlpInfo.Channel)
+			}
+			if title := ytdlpInfo.DisplayTitle(); title != "" {
+				LogGeneral("Video Title: %s\n", title)
+			}
+			di.InfoPrinted = true
+		}
+		di.Unlock()
+
+		if len(ytdlpInfo.URLs) == 0 {
+			if ytdlpInfo.IsPostLive() {
+				return di.FinishYtdlpLiveRefresh("Livestream has ended and is being processed. Download URLs not available.")
+			}
+			if ytdlpInfo.IsNotLive() {
+				return failInfo("This video is not a livestream. It would be better to use yt-dlp to download it.")
+			}
+			if ytdlpInfo.IsProcessedVOD() {
+				return di.FinishYtdlpLiveRefresh("Livestream has been processed. Use yt-dlp instead.")
+			}
+			if retryInfo("No fragmented download URLs found") {
+				continue
+			}
+			return failInfo("No fragmented download URLs found")
+		}
+		if ytdlpInfo.LastSq < 0 {
+			if ytdlpInfo.IsPostLive() {
+				return di.FinishYtdlpLiveRefresh("Livestream has ended and is being processed. Download fragment range not available.")
+			}
+			if ytdlpInfo.IsNotLive() {
+				return failInfo("This video is not a livestream. It would be better to use yt-dlp to download it.")
+			}
+			if ytdlpInfo.IsProcessedVOD() {
+				return di.FinishYtdlpLiveRefresh("Livestream has been processed. Use yt-dlp instead.")
+			}
+			if retryInfo("No fragment range found") {
+				continue
+			}
+			return failInfo("No fragment range found")
+		}
+		break
+	}
+
+	di.Lock()
+	defer di.Unlock()
+
+	if di.Stopping || di.Unavailable {
+		return false
+	}
+
+	if ytdlpInfo.ID != "" {
+		di.VideoID = ytdlpInfo.ID
+	}
+	if di.VideoID == "" {
+		LogError("No video ID found")
+		return false
+	}
+
+	di.LastSq = ytdlpInfo.LastSq
+
+	if !di.InfoPrinted {
+		if ytdlpInfo.Channel != "" {
+			LogGeneral("Channel: %s\n", ytdlpInfo.Channel)
+		}
+		if title := ytdlpInfo.DisplayTitle(); title != "" {
+			LogGeneral("Video Title: %s\n", title)
+		}
+		di.InfoPrinted = true
+	}
+
 	if !di.InProgress {
-		LogGeneral("Stream started at time %s", pmfr.LiveBroadcastDetails.StartTimestamp)
+		if startTimestamp := formatLocalUnixTimestamp(ytdlpInfo.StartUnix); startTimestamp != "" {
+			LogGeneral("Stream started at time %s", startTimestamp)
+		}
+	}
+
+	if len(ytdlpInfo.AdaptiveURLs) > 0 || len(ytdlpInfo.DashURLs) > 0 {
+		LogDebug("Loaded %d adaptive format URLs from yt-dlp", len(ytdlpInfo.AdaptiveURLs))
+		LogDebug("Loaded %d dash format URLs from yt-dlp", len(ytdlpInfo.DashURLs))
+	}
+
+	selectedQualities := []string{}
+	if len(di.SelectedQuality) > 0 {
+		selectedQualities = ParseQualitySelection(VideoQualities, di.SelectedQuality)
+	}
+	if !di.SelectDownloadFormats(ytdlpInfo.URLs, selectedQualities) {
+		return false
+	}
+
+	if !di.InProgress {
+		pageURL := di.URL
+		if di.VideoID != "" {
+			pageURL = fmt.Sprintf("https://www.youtube.com/watch?v=%s", di.VideoID)
+		}
+		di.FormatInfo.SetYtdlpInfo(ytdlpInfo, pageURL)
+		di.Metadata.SetInfo(di.FormatInfo)
+		di.Thumbnail = ytdlpInfo.Thumbnail
+		di.InProgress = true
+	}
+
+	di.Live = ytdlpInfo.IsLive
+	return true
+}
+
+// Get necessary video info such as video/audio URLs
+func (di *DownloadInfo) GetVideoInfo() bool {
+	if di.YtdlpInfo {
+		return di.GetVideoInfoFromYtdlp()
+	}
+
+	di.Lock()
+	defer di.Unlock()
+
+	/*
+		No point retrieving information if we know it's not available, or there
+		is nothing useful to be gotten
+	*/
+	if di.GVideoDDL || di.Stopping || di.Unavailable {
+		return false
+	}
+
+	// Almost nothing we care about is likely to change in 15 seconds
+	delta := time.Since(di.LastUpdated)
+	if delta < (DefaultPollTime * time.Second) {
+		return false
+	}
+
+	retrieved, pr, selQaulities := di.GetPlayablePlayerResponse()
+	di.LastUpdated = time.Now()
+	if retrieved == PlayerResponseNotFound {
+		di.Live = false
+		di.Unavailable = true
+		return false
+	} else if retrieved == PlayerResponseNotUsable {
+		return false
+	}
+
+	streamData := pr.StreamingData
+	pmfr := pr.Microformat.PlayerMicroformatRenderer
+	isLive := pmfr.LiveBroadcastDetails.IsLiveNow
+
+	if !di.InProgress {
+		LogGeneral("Stream started at time %s", formatLocalTimestamp(pmfr.LiveBroadcastDetails.StartTimestamp))
+	}
+
+	targetDur := int(streamData.AdaptiveFormats[0].TargetDurationSec)
+	if targetDur > 0 {
+		di.TargetDuration = targetDur
+	}
+	dlUrls := di.GetDownloadUrls(pr)
+
+	if !di.SelectDownloadFormats(dlUrls, selQaulities) {
+		return false
+	}
+
+	if !di.InProgress {
 		di.FormatInfo.SetInfo(pr)
 		di.Metadata.SetInfo(di.FormatInfo)
 		if len(pmfr.Thumbnail.Thumbnails) > 0 {
@@ -1272,7 +1832,7 @@ func (di *DownloadInfo) downloadFragment(state *fragThreadState, dataChan chan<-
 				req.Header.Add("Referer", fmt.Sprintf("https://%s/", host))
 			}
 
-			req.Header.Add("User-Agent", "Mozilla/5.0 (X11; Linux x86_64; rv:87.0) Gecko/20100101 Firefox/87.0")
+			req.Header.Add("User-Agent", "Mozilla/5.0 (X11; Linux x86_64; rv:152.0) Gecko/20100101 Firefox/152.0")
 			req.Header.Add("Origin", "https://www.youtube.com")
 
 			resp, err = client.Do(req)
@@ -1499,7 +2059,7 @@ func (di *DownloadInfo) DownloadStream(dataType, dataFile string, progressChan c
 		LogInfo("%s: Resuming download from sequence %d", dataType, curFrag)
 	} else {
 		if di.LastSq >= 0 {
-			curFrag = di.LastSq - (LiveMaximumSeekable / (di.TargetDuration))
+			curFrag = di.seekableStartSqFromLastSq(di.LastSq)
 			maxSeqs = di.LastSq
 		}
 
