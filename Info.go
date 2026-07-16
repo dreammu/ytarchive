@@ -1267,6 +1267,7 @@ func (di *DownloadInfo) SelectDownloadFormats(dlUrls map[int]string, selectedQua
 
 				if aonly {
 					di.Quality = AudioOnlyQuality
+					di.AudioOnly = true
 					di.SetDownloadUrl(DtypeVideo, "")
 					found = true
 					break
