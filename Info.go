@@ -684,7 +684,7 @@ func probeXHeadSeqnum(probeURL string) int {
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
 
-	req, err := http.NewRequestWithContext(ctx, "GET", probeURL, nil)
+	req, err := http.NewRequestWithContext(ctx, http.MethodHead, probeURL, nil)
 	if err != nil {
 		return -1
 	}
@@ -1530,11 +1530,8 @@ func (di *DownloadInfo) GetVideoInfoFromYtdlp() bool {
 		di.Unlock()
 
 		if len(ytdlpInfo.URLs) == 0 {
-			if ytdlpInfo.IsPostLive() {
-				return di.FinishYtdlpLiveRefresh("Livestream has ended and is being processed. Download URLs not available.")
-			}
 			if ytdlpInfo.IsNotLive() {
-				return failInfo("This video is not a livestream. It would be better to use yt-dlp to download it.")
+				return failInfo("This video is not a livestream. Use yt-dlp instead.")
 			}
 			if ytdlpInfo.IsProcessedVOD() {
 				return di.FinishYtdlpLiveRefresh("Livestream has been processed. Use yt-dlp instead.")
@@ -1545,11 +1542,14 @@ func (di *DownloadInfo) GetVideoInfoFromYtdlp() bool {
 			return failInfo("No fragmented download URLs found")
 		}
 		if ytdlpInfo.LastSq < 0 {
+			if ytdlpInfo.IsLive {
+				return failInfo("X-Head-Seqnum probe failed")
+			}
 			if ytdlpInfo.IsPostLive() {
-				return di.FinishYtdlpLiveRefresh("Livestream has ended and is being processed. Download fragment range not available.")
+				return failInfo("X-Head-Seqnum probe failed")
 			}
 			if ytdlpInfo.IsNotLive() {
-				return failInfo("This video is not a livestream. It would be better to use yt-dlp to download it.")
+				return failInfo("This video is not a livestream. Use yt-dlp instead.")
 			}
 			if ytdlpInfo.IsProcessedVOD() {
 				return di.FinishYtdlpLiveRefresh("Livestream has been processed. Use yt-dlp instead.")
