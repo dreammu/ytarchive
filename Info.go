@@ -187,6 +187,7 @@ type DownloadInfo struct {
 	VideoID         string
 	URL             string
 	SelectedQuality string
+	FormatPriority  map[string]string
 	Status          string
 	LiveFromVal     string
 	YtdlpPath       string
@@ -220,6 +221,7 @@ func NewDownloadInfo() *DownloadInfo {
 		TargetDuration: 5,
 		FormatInfo:     NewFormatInfo(),
 		Metadata:       NewMetaInfo(),
+		FormatPriority: make(map[string]string),
 		MDLInfo: map[string]*MediaDLInfo{
 			DtypeVideo: {},
 			DtypeAudio: {},
@@ -1204,6 +1206,54 @@ func (di *DownloadInfo) GetCodecPriorityOrder() []string {
 	return order
 }
 
+func ParseFormatPriority(value string) (map[string]string, error) {
+	validQualities := map[string]bool{
+		"144p": true, "240p": true, "360p": true, "480p": true,
+		"720p": true, "1080p": true, "1440p": true, "2160p": true,
+	}
+	validCodecs := map[string]bool{"h264": true, "vp9": true, "av1": true}
+	priorities := make(map[string]string)
+
+	for _, entry := range strings.Split(value, ",") {
+		entry = strings.TrimSpace(entry)
+		parts := strings.Split(entry, ":")
+		if len(parts) != 2 {
+			return nil, fmt.Errorf("invalid format-priority entry %q (expected resolution:codec)", entry)
+		}
+
+		quality := strings.ToLower(strings.TrimSpace(parts[0]))
+		codec := strings.ToLower(strings.TrimSpace(parts[1]))
+		if !validQualities[quality] {
+			return nil, fmt.Errorf("unsupported resolution %q in --format-priority", quality)
+		}
+		if !validCodecs[codec] {
+			return nil, fmt.Errorf("unsupported codec %q in --format-priority", codec)
+		}
+
+		priorities[quality] = codec
+	}
+
+	return priorities, nil
+}
+
+func (di *DownloadInfo) GetCodecPriorityOrderForQuality(quality string) []string {
+	order := di.GetCodecPriorityOrder()
+	quality = strings.TrimSuffix(strings.ToLower(strings.TrimSpace(quality)), "60")
+	preferred, ok := di.FormatPriority[quality]
+	if !ok || !Contains(order, preferred) {
+		return order
+	}
+
+	prioritized := []string{preferred}
+	for _, codec := range order {
+		if codec != preferred {
+			prioritized = append(prioritized, codec)
+		}
+	}
+
+	return prioritized
+}
+
 func (di *DownloadInfo) SelectDownloadFormats(dlUrls map[int]string, selectedQualities []string) bool {
 	if len(dlUrls) == 0 {
 		LogError("No download URLs found")
@@ -1273,7 +1323,7 @@ func (di *DownloadInfo) SelectDownloadFormats(dlUrls map[int]string, selectedQua
 					break
 				}
 
-				codecOrder := di.GetCodecPriorityOrder()
+				codecOrder := di.GetCodecPriorityOrderForQuality(q)
 				LogDebug("Codec priority order: %s", strings.ToUpper(strings.Join(codecOrder, ", ")))
 				for _, codec := range codecOrder {
 					var itag int

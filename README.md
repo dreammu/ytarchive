@@ -113,6 +113,11 @@ Options:
 		numeric notation. Be aware of umask settings for your directory.
 		Default is 0644.
 
+	--format-priority PRIORITIES
+		Prefer a codec for specific video resolutions while keeping other
+		codecs as fallback. Example: --format-priority
+		"720p:h264,1080p:h264,1440p:vp9,2160p:vp9"
+
 	--h264
 		Only download h264 video, skipping VP9 if it would have been used.
 
