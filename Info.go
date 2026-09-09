@@ -1542,10 +1542,10 @@ func (di *DownloadInfo) GetVideoInfoFromYtdlp() bool {
 			return failInfo("No fragmented download URLs found")
 		}
 		if ytdlpInfo.LastSq < 0 {
-			if ytdlpInfo.IsLive {
-				return failInfo("X-Head-Seqnum probe failed")
-			}
-			if ytdlpInfo.IsPostLive() {
+			if ytdlpInfo.IsLive || ytdlpInfo.IsPostLive() {
+				if retryInfo("X-Head-Seqnum probe failed") {
+					continue
+				}
 				return failInfo("X-Head-Seqnum probe failed")
 			}
 			if ytdlpInfo.IsNotLive() {
