@@ -15,7 +15,7 @@ This is a forked version based on [Kethsar/ytarchive](https://github.com/Kethsar
 
 ### 3. Personal preference optimizations
 - **Enhanced Retry Mechanism**: Added up to 3 retry attempts for retrieving player response and video details.
-- **Re-extraction**: The re-extraction per hour and slow fragment refresh logic has been commented out. That's saying only when getting 403 errors during downloading, the URLs will be refreshed.
+- **URL refresh**: Download URLs are refreshed in the background every 5 hours without pausing downloads, and a failed refresh leaves the existing URLs in use. Network failures (including HTTP 403) also trigger a refresh after reaching `--retry-frags` (default 10); setting it to 0 disables this trigger but keeps the 5-hour refresh.
 
 ## Original project description
 
@@ -224,6 +224,7 @@ Options:
 		Network failures reaching this limit trigger a download URL refresh attempt.
 		Set to 0 to retry indefinitely without count-triggered URL refreshes,
 		or until we are completely unable to continue.
+		The automatic 5-hour background refresh remains enabled with 0.
 		Default is 10.
 
 	-r

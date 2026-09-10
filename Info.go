@@ -159,12 +159,14 @@ Miscellaneous information
 */
 type DownloadInfo struct {
 	sync.RWMutex
-	FormatInfo  FormatInfo
-	Metadata    MetaInfo
-	CookiesURL  *url.URL
-	Ytcfg       *YTCFG
-	VisitorData string
-	PoToken     string
+	infoRefreshMu  sync.Mutex
+	LastURLRefresh time.Time
+	FormatInfo     FormatInfo
+	Metadata       MetaInfo
+	CookiesURL     *url.URL
+	Ytcfg          *YTCFG
+	VisitorData    string
+	PoToken        string
 
 	Stopping         bool
 	InProgress       bool
@@ -1358,6 +1360,10 @@ func (di *DownloadInfo) SelectDownloadFormats(dlUrls map[int]string, selectedQua
 		return false
 	}
 
+	if (di.VideoOnly || IsFragmented(dlUrls[AudioItag])) &&
+		(di.AudioOnly || IsFragmented(dlUrls[di.Quality])) {
+		di.LastURLRefresh = time.Now()
+	}
 	return true
 }
 
@@ -1622,8 +1628,61 @@ func (di *DownloadInfo) GetVideoInfoFromYtdlp() bool {
 	return true
 }
 
+// refreshURLs checks the interval in the download loop and starts at most one background refresh.
+func (di *DownloadInfo) refreshURLs(ctx context.Context) bool {
+	if !di.infoRefreshMu.TryLock() {
+		return false
+	}
+	di.Lock()
+	now := time.Now()
+	if ctx.Err() != nil || di.Stopping || di.Unavailable || di.GVideoDDL || !di.InProgress ||
+		di.LastURLRefresh.IsZero() || now.Sub(di.LastURLRefresh) < 5*time.Hour ||
+		now.Sub(di.LastUpdated) < DefaultPollTime*time.Second {
+		di.Unlock()
+		di.infoRefreshMu.Unlock()
+		return false
+	}
+	// Only extraction settings are needed. Parsing must not mutate the active download.
+	extractor := &DownloadInfo{URL: di.URL, YtdlpPath: di.YtdlpPath, YtdlpOpts: di.YtdlpOpts, YtdlpInfo: true}
+	di.Unlock()
+
+	go func() {
+		defer di.infoRefreshMu.Unlock()
+		LogDebug("Refreshing download URLs in background (5-hour interval)")
+		var info *YtdlpExtraction
+		if data := extractor.ExecuteYtdlpWithRetry(3); data != nil {
+			info, _ = extractor.ParseYtdlpJsonInfo(data)
+		}
+		di.Lock()
+		defer di.Unlock()
+		if ctx.Err() != nil || di.Stopping || di.Unavailable {
+			return
+		}
+		di.LastUpdated = time.Now()
+		di.LastURLRefresh = di.LastUpdated
+		if info == nil || info.LastSq < 0 ||
+			(!di.VideoOnly && !IsFragmented(info.URLs[AudioItag])) ||
+			(!di.AudioOnly && !IsFragmented(info.URLs[di.Quality])) {
+			LogWarn("Scheduled URL refresh failed; continuing with existing URLs")
+			return
+		}
+		if !di.VideoOnly {
+			di.SetDownloadUrl(DtypeAudio, info.URLs[AudioItag])
+		}
+		if !di.AudioOnly {
+			di.SetDownloadUrl(DtypeVideo, info.URLs[di.Quality])
+		}
+	}()
+	return true
+}
+
 // Get necessary video info such as video/audio URLs
 func (di *DownloadInfo) GetVideoInfo() bool {
+	if !di.infoRefreshMu.TryLock() {
+		return false
+	}
+	defer di.infoRefreshMu.Unlock()
+
 	if di.YtdlpInfo {
 		return di.GetVideoInfoFromYtdlp()
 	}
@@ -1921,6 +1980,8 @@ func (di *DownloadInfo) DownloadStream(dataType, dataFile string, progressChan c
 	var f *os.File
 	var err error
 	defer func() { done <- struct{}{} }()
+	refreshCtx, cancelRefresh := context.WithCancel(context.Background())
+	defer cancelRefresh()
 
 	if dataType == DtypeAudio {
 		itag = AudioItag
@@ -2208,10 +2269,9 @@ func (di *DownloadInfo) DownloadStream(dataType, dataFile string, progressChan c
 			break
 		}
 
-		// updateDelta := di.GetTimeSinceUpdated()
-		// if !stopping && !di.IsUnavailable() && updateDelta > time.Hour {
-		// 	di.GetVideoInfo()
-		// }
+		if !stopping && !closed {
+			di.refreshURLs(refreshCtx)
+		}
 
 		if tries <= 0 {
 			LogWarn("%s: Stopping download, something must be wrong...", logName)

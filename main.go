@@ -230,6 +230,7 @@ Options:
 		Network failures reaching this limit trigger a download URL refresh attempt.
 		Set to 0 to retry indefinitely without count-triggered URL refreshes,
 		or until we are completely unable to continue.
+		The automatic 5-hour background refresh remains enabled with 0.
 		Default is 10.
 
 	-r
