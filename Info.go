@@ -1751,6 +1751,7 @@ func (di *DownloadInfo) downloadFragment(state *fragThreadState, dataChan chan<-
 			HandleFragDownloadError(di, state, err)
 
 			state.Tries += 1
+			RetryFragmentURL(di, state, baseUrl)
 			if !ContinueFragmentDownload(di, state) {
 				return
 			}
@@ -1767,6 +1768,7 @@ func (di *DownloadInfo) downloadFragment(state *fragThreadState, dataChan chan<-
 			HandleFragDownloadError(di, state, err)
 
 			state.Tries += 1
+			RetryFragmentURL(di, state, baseUrl)
 			if !ContinueFragmentDownload(di, state) {
 				return
 			}
@@ -1776,9 +1778,10 @@ func (di *DownloadInfo) downloadFragment(state *fragThreadState, dataChan chan<-
 		}
 
 		if resp.StatusCode >= 400 {
-			HandleFragHttpError(di, state, resp.StatusCode, baseUrl)
+			HandleFragHttpError(di, state, resp.StatusCode)
 
 			state.Tries += 1
+			RetryFragmentURL(di, state, baseUrl)
 			if !ContinueFragmentDownload(di, state) {
 				return
 			}
@@ -1793,6 +1796,7 @@ func (di *DownloadInfo) downloadFragment(state *fragThreadState, dataChan chan<-
 		*/
 		if len(respData) == 0 {
 			state.Tries += 1
+			RetryFragmentURL(di, state, baseUrl)
 			if !ContinueFragmentDownload(di, state) {
 				return
 			}

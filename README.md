@@ -221,7 +221,9 @@ Options:
 
 	--retry-frags ATTEMPTS
 		Set the number of attempts to make when downloading a stream fragment.
-		Set to 0 to retry indefinitely, or until we are completely unable to.
+		Network failures reaching this limit trigger a download URL refresh attempt.
+		Set to 0 to retry indefinitely without count-triggered URL refreshes,
+		or until we are completely unable to continue.
 		Default is 10.
 
 	-r

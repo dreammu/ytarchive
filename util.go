@@ -662,11 +662,6 @@ func ContinueFragmentDownload(di *DownloadInfo, state *fragThreadState) bool {
 		LogDebug("%s: Fragment %d: %d/%d retries", state.Name, state.SeqNum, state.Tries, di.FragMaxTries)
 		di.PrintStatus()
 
-		// Update video info to be safe if we are known to still be live
-		if di.IsLive() {
-			di.GetVideoInfo()
-		}
-
 		if !di.IsLive() || di.IsUnavailable() {
 			if state.Is403 {
 				if di.IsUnavailable() {
@@ -696,13 +691,23 @@ func ContinueFragmentDownload(di *DownloadInfo, state *fragThreadState) bool {
 	return true
 }
 
-func HandleFragHttpError(di *DownloadInfo, state *fragThreadState, statusCode int, url string) {
+// RetryFragmentURL shares the fragment attempt limit with the stop/retry logic.
+// A zero limit means unlimited retries without a count-triggered URL refresh.
+func RetryFragmentURL(di *DownloadInfo, state *fragThreadState, url string) {
+	if di.IsFinished(state.DataType) || di.IsStopping() {
+		return
+	}
+	if di.FragMaxTries > 0 && state.Tries >= int(di.FragMaxTries) {
+		RefreshURL(di, state.DataType, url)
+	}
+}
+
+func HandleFragHttpError(di *DownloadInfo, state *fragThreadState, statusCode int) {
 	LogDebug("%s: HTTP Error for fragment %d: %d %s", state.Name, state.SeqNum, statusCode, http.StatusText(statusCode))
 	di.PrintStatus()
 
 	if statusCode == http.StatusForbidden {
 		state.Is403 = true
-		RefreshURL(di, state.DataType, url)
 	} else if statusCode == http.StatusNotFound && state.MaxSeq > -1 && !di.IsLive() && state.SeqNum > (state.MaxSeq-2) {
 		LogDebug("%s: Stream has ended and fragment within the last two not found, probably not actually created", state.Name)
 		di.PrintStatus()
