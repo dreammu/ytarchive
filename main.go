@@ -119,6 +119,11 @@ Options:
 		numeric notation. Be aware of umask settings for your directory.
 		Default is 0644.
 
+	--format-priority PRIORITIES
+		Prefer a codec for specific video resolutions while keeping other
+		codecs as fallback. Example: --format-priority
+		"720p:h264,1080p:h264,1440p:vp9,2160p:vp9"
+
 	--h264
 		Only download h264 video, skipping VP9 if it would have been used.
 
@@ -533,6 +538,14 @@ func init() {
 	cliFlags.BoolVar(&vp9, "vp9", false, "Download VP9 video if available.")
 	cliFlags.BoolVar(&av1, "av1", false, "Download AV1 video if available. Takes priority.")
 	cliFlags.BoolVar(&h264, "h264", false, "Only download h264 qualities.")
+	cliFlags.Func("format-priority", "Prefer codecs for specific video resolutions.", func(s string) error {
+		priorities, err := ParseFormatPriority(s)
+		if err != nil {
+			return err
+		}
+		info.FormatPriority = priorities
+		return nil
+	})
 	cliFlags.BoolVar(&ytdlpInfo, "ytdlp-info", false, "Use yt-dlp to extract stream info and ytarchive to download fragments.")
 	cliFlags.BoolVar(&addMeta, "add-metadata", false, "Write metadata to the final file.")
 	cliFlags.BoolVar(&writeDesc, "write-description", false, "Write description to a separate file.")
