@@ -985,7 +985,6 @@ func GetFFmpegArgs(audioFile, videoFile, thumbnail, fileDir, fileName string, on
 	if !onlyVideo {
 		ffmpegArgs = append(ffmpegArgs,
 			"-seekable", "0",
-			"-thread_queue_size", "1024",
 			"-i", audioFile,
 		)
 	}
@@ -993,7 +992,6 @@ func GetFFmpegArgs(audioFile, videoFile, thumbnail, fileDir, fileName string, on
 	if !onlyAudio {
 		ffmpegArgs = append(ffmpegArgs,
 			"-seekable", "0",
-			"-thread_queue_size", "1024",
 			"-i", videoFile,
 		)
 		if !mkv {
