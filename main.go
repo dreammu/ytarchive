@@ -27,7 +27,7 @@ const (
 const (
 	MajorVersion = 0
 	MinorVersion = 5
-	PatchVersion = 3
+	PatchVersion = 4
 )
 
 var (
@@ -227,7 +227,10 @@ Options:
 
 	--retry-frags ATTEMPTS
 		Set the number of attempts to make when downloading a stream fragment.
-		Set to 0 to retry indefinitely, or until we are completely unable to.
+		Network failures reaching this limit trigger a download URL refresh attempt.
+		Set to 0 to retry indefinitely without count-triggered URL refreshes,
+		or until we are completely unable to continue.
+		The automatic 5-hour background refresh remains enabled with 0.
 		Default is 10.
 
 	-r
@@ -1020,7 +1023,7 @@ func run() int {
 
 			status += fmt.Sprintf("Video Fragments: %d; Audio Fragments: %d; ", info.DLState[info.Quality].Fragments, info.DLState[AudioItag].Fragments)
 			if verbose {
-				status += fmt.Sprintf("Max Fragments: %d; Max Sequence: %d; ", (maxSeq - progress.StartFrag), maxSeq)
+				status += fmt.Sprintf("Max Fragments: %d; Max Sequence: %d; ", (maxSeq - progress.StartFrag + 1), maxSeq)
 			}
 
 			status += fmt.Sprintf("Total Downloaded: %s", FormatSize(totalBytes))
